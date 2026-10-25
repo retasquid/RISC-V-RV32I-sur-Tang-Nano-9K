@@ -1,5 +1,5 @@
 # unmapped.S
-# B4 : une zone non mappee (VRAM tant que le VGA est commente, 0x20..., 0xF0...)
+# B4 : une zone non mappee (0x60..., 0x20..., 0xF0...)
 # repond rdy = 1 et din = 0 : l'ecriture est perdue, la lecture rend 0 et le
 # coeur ne se bloque pas. Verifie aussi qu'une ecriture TOHOST-like dans l'IO
 # non decodee ne perturbe pas les registres voisins.
@@ -10,10 +10,10 @@
 RVTEST_RV32U
 RVTEST_CODE_BEGIN
 
-  # Test 2 : SW puis LW en VRAM (0xC0000004)
+  # Test 2 : SW puis LW a 0x60000004
 test_2:
   li    TESTNUM, 2
-  li    t0, 0xC0000004
+  li    t0, 0x60000004
   li    t1, 0x12345678
   sw    t1, 0(t0)
   lw    t2, 0(t0)

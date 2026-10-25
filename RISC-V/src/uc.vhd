@@ -6,6 +6,7 @@
 --   S_FETCH  : rd = 1, adr = PC. Quand rdy = 1 : IR <= din (enIR, Mealy),
 --              rd retombe -> S_DECODE
 --   S_DECODE : IR valide. Load/store : rd/we leves, adr = resultat ALU
+--              (enregistre dans core : enAdr)
 --              -> S_MEM. Sinon : ecriture de rd et mise a jour du PC dans ce
 --              cycle (wEn/enPc, Mealy), rd leve pour le fetch suivant -> S_FETCH
 --   S_MEM    : attente de rdy. Load : ecriture de rd avec din ; PC + 4 ;
@@ -33,6 +34,7 @@ ENTITY uc IS
         wEn, selS1Alu, selS2Alu : out   std_logic;
         altAlu, brchEn          : out   std_logic;
         adrSel                  : out   std_logic;
+        enAdr                   : out   std_logic;   -- capture de l'adresse load/store
         clk, rst                : in    std_logic
     );
 END ENTITY;
@@ -97,6 +99,9 @@ BEGIN
     -- Validations du chemin de donnees (Mealy) : prises en compte au front
     -- montant qui termine le cycle courant
     enIR <= '1' WHEN state = S_FETCH AND rdy = '1' ELSE '0';
+    -- L'adresse d'un load/store est enregistree a la fin de S_DECODE : en
+    -- S_MEM, le bus voit un registre et non la sortie de l'ALU (timing)
+    enAdr <= '1' WHEN state = S_DECODE ELSE '0';
     enPc <= '1' WHEN (state = S_DECODE AND mem = '0') OR (state = S_MEM AND rdy = '1') ELSE '0';
     wEn  <= '1' WHEN writesRd = '1' AND ((state = S_DECODE AND mem = '0') OR
                                          (state = S_MEM AND rdy = '1' AND load = '1')) ELSE '0';

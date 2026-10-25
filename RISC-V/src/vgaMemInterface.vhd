@@ -1,29 +1,42 @@
+--------------------------------------------------------------------------------
+-- vgaMemInterface.vhd
+-- VRAM de 32 Kio (8192 mots de 32 bits) en 4 BRAM double port 8K x 8 (une par
+-- octet), lecture "bypass" : 1 cycle de latence.
+--   port A : coeur (CLK_VRAM = clk27), lecture/ecriture, protocole esclave
+--            commun : requete traitee une fois quand CS AND (RD XOR WR),
+--            RDY et DOUT tenus jusqu'a ce que RD et WR retombent
+--   port B : generateur video (CLK_VGA), lecture seule
+-- Ecritures par octets : WENB_VRAM vient du coeur deja positionne sur les
+-- octets vises ; la donnee n'est pas decalee (octet 0 de DIN = premier octet
+-- ecrit), elle est donc placee selon ADDR_VRAM(1:0).
+--------------------------------------------------------------------------------
 LIBRARY ieee;
 USE ieee.std_logic_1164.all;
 USE ieee.numeric_std.all;
 
 ENTITY vgaMemInterface IS
     PORT (
-        RST       : in  STD_LOGIC;
+        RST       : in  std_logic;
         -- CPU interface
-        CLK_VRAM  : in  STD_LOGIC;
-        CS_VRAM   : in  STD_LOGIC;
-        WR_VRAM   : in  STD_LOGIC;
-        RD_VRAM   : in  STD_LOGIC;
-        RDY_VRAM  : out  STD_LOGIC;
-        WENB_VRAM : in  STD_LOGIC_VECTOR(3 DOWNTO 0);
-        ADDR_VRAM : in  STD_LOGIC_VECTOR(14 DOWNTO 0);
-        DIN_VRAM  : in  STD_LOGIC_VECTOR(31 DOWNTO 0);
-        DOUT_VRAM : out STD_LOGIC_VECTOR(31 DOWNTO 0);
+        CLK_VRAM  : in  std_logic;
+        CS_VRAM   : in  std_logic;
+        WR_VRAM   : in  std_logic;
+        RD_VRAM   : in  std_logic;
+        RDY_VRAM  : out std_logic;
+        WENB_VRAM : in  std_logic_vector(3 DOWNTO 0);
+        ADDR_VRAM : in  std_logic_vector(14 DOWNTO 0);
+        DIN_VRAM  : in  std_logic_vector(31 DOWNTO 0);
+        DOUT_VRAM : out std_logic_vector(31 DOWNTO 0);
         -- VGA interface
-        CLK_VGA  : in  STD_LOGIC;
-        CS_VGA   : in  STD_LOGIC;
-        ADDR_VGA : in  STD_LOGIC_VECTOR(12 DOWNTO 0);
-        DOUT_VGA : out STD_LOGIC_VECTOR(31 DOWNTO 0)
+        CLK_VGA   : in  std_logic;
+        RST_VGA   : in  std_logic;
+        CS_VGA    : in  std_logic;
+        ADDR_VGA  : in  std_logic_vector(12 DOWNTO 0);
+        DOUT_VGA  : out std_logic_vector(31 DOWNTO 0)
     );
 END ENTITY;
 
-ARCHITECTURE vgaMemInterfaceV1 OF vgaMemInterface IS
+ARCHITECTURE vgaMemInterfaceV2 OF vgaMemInterface IS
     COMPONENT Gowin_DPB
     PORT (
         douta: out std_logic_vector(7 downto 0);
@@ -45,151 +58,61 @@ ARCHITECTURE vgaMemInterfaceV1 OF vgaMemInterface IS
     );
     END COMPONENT;
 
-    SIGNAL RAM0_WR, RAM1_WR, RAM2_WR, RAM3_WR               : std_logic;
-    SIGNAL RDY_VRAM_Z_TMP, RDY_VRAM_Z                       : std_logic;
-    SIGNAL RAM0_DIN, RAM1_DIN, RAM2_DIN, RAM3_DIN           : std_logic_vector(7 downto 0);
-    SIGNAL DOUT_VRAM_Z                                      : std_logic_vector(31 downto 0);
+    SIGNAL ack      : std_logic := '0';
+    SIGNAL accept   : std_logic;
+    SIGNAL dinSh    : std_logic_vector(31 downto 0);
+    SIGNAL wrByte   : std_logic_vector(3 downto 0);
 BEGIN
-    RDY_VRAM <= RDY_VRAM_Z WHEN CS_VRAM = '1' ELSE 'Z';
-    DOUT_VRAM <= DOUT_VRAM_Z WHEN CS_VRAM = '1' ELSE (OTHERS => 'Z');
+
+    RDY_VRAM <= ack;
+    accept   <= CS_VRAM AND (RD_VRAM XOR WR_VRAM) AND NOT ack;
+
+    -- Ecriture au cycle d'acceptation seulement, sur les octets de WENB
+    gen_wr : FOR i IN 0 TO 3 GENERATE
+        wrByte(i) <= accept AND WR_VRAM AND WENB_VRAM(i);
+    END GENERATE;
+
+    WITH ADDR_VRAM(1 downto 0) SELECT
+    dinSh <= DIN_VRAM                          WHEN "00",
+             DIN_VRAM(23 downto 0) & x"00"     WHEN "01",
+             DIN_VRAM(15 downto 0) & x"0000"   WHEN "10",
+             DIN_VRAM(7 downto 0)  & x"000000" WHEN OTHERS;
 
     PROCESS(CLK_VRAM)
     BEGIN
-        IF(rising_edge(CLK_VRAM)) THEN
-            RDY_VRAM_Z_TMP <= RD_VRAM OR WR_VRAM;
-            RDY_VRAM_Z <= RDY_VRAM_Z_TMP;
+        IF rising_edge(CLK_VRAM) THEN
+            IF RST = '1' THEN
+                ack <= '0';
+            ELSIF accept = '1' THEN
+                ack <= '1';
+            ELSIF RD_VRAM = '0' AND WR_VRAM = '0' THEN
+                ack <= '0';
+            END IF;
         END IF;
     END PROCESS;
 
-    ram0_8k_8b: Gowin_DPB
-    PORT MAP (
-        douta => DOUT_VRAM_Z(7 downto 0),
-        doutb => DOUT_VGA(7 downto 0),
-        clka => CLK_VRAM,
-        ocea => CS_VRAM,
-        cea => CS_VRAM,
-        reseta => RST,
-        wrea => RAM0_WR,
-        clkb => CLK_VGA,
-        oceb => CS_VGA,
-        ceb => CS_VGA,
-        resetb => RST,
-        wreb => '0',
-        ada => ADDR_VRAM(14 downto 2),
-        dina => RAM0_DIN,
-        adb => ADDR_VGA,
-        dinb => x"00"
-    );
-    
-    ram1_8k_8b: Gowin_DPB
-    PORT MAP (
-        douta => DOUT_VRAM_Z(15 downto 8),
-        doutb => DOUT_VGA(15 downto 8),
-        clka => CLK_VRAM,
-        ocea => CS_VRAM,
-        cea => CS_VRAM,
-        reseta => RST,
-        wrea => RAM1_WR,
-        clkb => CLK_VGA,
-        oceb => CS_VGA,
-        ceb => CS_VGA,
-        resetb => RST,
-        wreb => '0',
-        ada => ADDR_VRAM(14 downto 2),
-        dina => RAM1_DIN,
-        adb => ADDR_VGA,
-        dinb => x"00"
-    );
-    
-    ram2_8k_8b : Gowin_DPB
-    PORT MAP (
-        douta => DOUT_VRAM_Z(23 downto 16),
-        doutb => DOUT_VGA(23 downto 16),
-        clka => CLK_VRAM,
-        ocea => CS_VRAM,
-        cea => CS_VRAM,
-        reseta => RST,
-        wrea => RAM2_WR,
-        clkb => CLK_VGA,
-        oceb => CS_VGA,
-        ceb => CS_VGA,
-        resetb => RST,
-        wreb => '0',
-        ada => ADDR_VRAM(14 downto 2),
-        dina => RAM2_DIN,
-        adb => ADDR_VGA,
-        dinb => x"00"
-    );
-    
-    ram3_8k_8b: Gowin_DPB
-    PORT MAP (
-        douta => DOUT_VRAM_Z(31 downto 24),
-        doutb => DOUT_VGA(31 downto 24),
-        clka => CLK_VRAM,
-        ocea => CS_VRAM,
-        cea => CS_VRAM,
-        reseta => RST,
-        wrea => RAM3_WR,
-        clkb => CLK_VGA,
-        oceb => CS_VGA,
-        ceb => CS_VGA,
-        resetb => RST,
-        wreb => '0',
-        ada => ADDR_VRAM(14 downto 2),
-        dina => RAM3_DIN,
-        adb => ADDR_VGA,
-        dinb => x"00"
-    );
-
-    -- WENB logic for Data In
-    WITH ADDR_VRAM(1 downto 0) SELECT
-    RAM0_DIN <= DIN_VRAM(7 downto 0)    WHEN "00",
-                x"00"                   WHEN "01",
-                x"00"                   WHEN "10",
-                x"00"                   WHEN OTHERS;
-
-    WITH ADDR_VRAM(1 downto 0) SELECT
-    RAM1_DIN <= DIN_VRAM(15 downto 8)   WHEN "00",
-                DIN_VRAM(7 downto 0)    WHEN "01",
-                x"00"                   WHEN "10",
-                x"00"                   WHEN OTHERS;
-
-    WITH ADDR_VRAM(1 downto 0) SELECT
-    RAM2_DIN <= DIN_VRAM(23 downto 16)  WHEN "00",
-                DIN_VRAM(15 downto 8)   WHEN "01",
-                DIN_VRAM(7 downto 0)    WHEN "10",
-                x"00"                   WHEN OTHERS;
-
-    WITH ADDR_VRAM(1 downto 0) SELECT
-    RAM3_DIN <= DIN_VRAM(31 downto 24)  WHEN "00",
-                DIN_VRAM(23 downto 16)  WHEN "01",
-                DIN_VRAM(15 downto 8)   WHEN "10",
-                DIN_VRAM(7 downto 0)    WHEN OTHERS;
-
-
-    -- WENB logic for Write
-    WITH ADDR_VRAM(1 downto 0) SELECT
-    RAM0_WR  <= WENB_VRAM(0) WHEN "00",
-                '0'          WHEN "01",
-                '0'          WHEN "10",
-                '0'          WHEN OTHERS;
-
-    WITH ADDR_VRAM(1 downto 0) SELECT
-    RAM1_WR  <= WENB_VRAM(1) WHEN "00",
-                WENB_VRAM(0) WHEN "01",
-                '0'          WHEN "10",
-                '0'          WHEN OTHERS;
-
-    WITH ADDR_VRAM(1 downto 0) SELECT
-    RAM2_WR  <= WENB_VRAM(2) WHEN "00",
-                WENB_VRAM(1) WHEN "01",
-                WENB_VRAM(0) WHEN "10",
-                '0'          WHEN OTHERS;
-
-    WITH ADDR_VRAM(1 downto 0) SELECT
-    RAM3_WR  <= WENB_VRAM(3) WHEN "00",
-                WENB_VRAM(2) WHEN "01",
-                WENB_VRAM(1) WHEN "10",
-                WENB_VRAM(0) WHEN OTHERS;
+    -- Port A lu en continu : la donnee de l'adresse presentee au cycle
+    -- d'acceptation est disponible quand RDY monte, et reste stable ensuite
+    gen_ram : FOR i IN 0 TO 3 GENERATE
+        ram_8k_8b : Gowin_DPB
+        PORT MAP (
+            douta  => DOUT_VRAM(8*i+7 downto 8*i),
+            doutb  => DOUT_VGA(8*i+7 downto 8*i),
+            clka   => CLK_VRAM,
+            ocea   => '1',
+            cea    => '1',
+            reseta => RST,
+            wrea   => wrByte(i),
+            clkb   => CLK_VGA,
+            oceb   => '1',
+            ceb    => CS_VGA,
+            resetb => RST_VGA,
+            wreb   => '0',
+            ada    => ADDR_VRAM(14 downto 2),
+            dina   => dinSh(8*i+7 downto 8*i),
+            adb    => ADDR_VGA,
+            dinb   => x"00"
+        );
+    END GENERATE;
 
 END ARCHITECTURE;

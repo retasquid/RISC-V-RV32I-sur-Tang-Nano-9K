@@ -5,7 +5,7 @@ MEMORY
     IO     (rw)  : ORIGIN = 0x00000000, LENGTH = 32
     FLASH  (rx)  : ORIGIN = 0x40000000, LENGTH = 4M
     RAM    (rwx) : ORIGIN = 0x80000000, LENGTH = 8M
-    VRAM   (rw)  : ORIGIN = 0xC0000000, LENGTH = 8K
+    VRAM   (rw)  : ORIGIN = 0xC0000000, LENGTH = 32K
 }
 
 /* Vector table at the very end of Flash */

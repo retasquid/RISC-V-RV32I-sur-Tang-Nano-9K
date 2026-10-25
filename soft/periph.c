@@ -6,7 +6,6 @@ int serialRead(char *ptr, int len_max)
     int tmp_rx = 0;
     while(tmp_rx != '\r') {
         tmp_rx = RX_UART;
-        GPIO0 = i;
         if(tmp_rx & 0x100){
             tmp_rx &= 0xff; 
             if(tmp_rx==0x7F){ // backspace

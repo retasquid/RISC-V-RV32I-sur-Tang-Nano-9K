@@ -4,21 +4,23 @@
 -- le bus du coeur. QE (S9) doit etre a 1 : c'est fait une fois par le flasher.
 --
 -- Init, relancee a chaque rst :
---   attente INIT_WAIT cycles (tVSL >= 1.8 ms apres la mise sous tension),
+--   attente INIT_WAIT = 2 ms (tVSL >= 1.8 ms apres la mise sous tension),
 --   sortie du mode continu (8 coups a FFh sur SIO0-3 : la flash y est peut-
 --   etre restee apres un reset bouton, sinon c'est une commande FFh sans
---   effet), RESET 66h/99h, puis attente RST_WAIT cycles (tRST 30 us).
+--   effet), RESET 66h/99h, puis attente RST_WAIT = 40 us (tRST 30 us).
+--   Les attentes sont calculees a partir de CLK_HZ (frequence de clk).
 -- Lecture : EBh (commande sur SIO0), adresse alignee en quad, M = 20h
 --   (M5-4 = "10" -> mode continu), 4 dummy, 4 octets -> mot 32 bits.
 --   Une fois en mode continu, les lectures suivantes sautent la commande.
 -- Flux : apres une lecture, CS# reste bas (qspi_master hold). Si la lecture
 --   suivante vise le mot suivant (fetchs sequentiels), on reprend juste la
---   phase donnees : 8 coups au lieu de 20. Sinon, CS# remonte (release) et
+--   phase donnees : 8 coups au lieu de 20. Sinon, CS# remonte (hold_end) et
 --   une nouvelle lecture continue demarre.
 -- Ecriture : ignoree, mais acquittee (rdy) pour ne pas bloquer le coeur.
 -- Bus : une requete est acceptee quand cs = '1' et rd XOR wr ; rdy et dout
 -- sont tenus jusqu'a ce que rd et wr retombent (handshake de uc).
--- clkQspiEn : tick d'une demi-periode SCLK ('1' -> SCLK = clk/2).
+-- clkQspiEn ET un diviseur interne (SCLK_DIV) donnent le tick du moteur :
+-- un coup de SCLK par tick. SCLK_DIV = 1 et clkQspiEn = '1' -> SCLK = clk.
 --------------------------------------------------------------------------------
 LIBRARY ieee;
 USE ieee.std_logic_1164.all;
@@ -27,8 +29,8 @@ USE ieee.numeric_std.all;
 ENTITY qspi_flash IS
     GENERIC (
         A_WIDTH   : integer := 22;
-        INIT_WAIT : natural := 54000;   -- cycles de clk : 2 ms a 27 MHz
-        RST_WAIT  : natural := 1080     -- cycles de clk : 40 us a 27 MHz
+        CLK_HZ    : natural := 31_500_000;  -- frequence de clk
+        SCLK_DIV  : positive := 1           -- SCLK = clk / SCLK_DIV
     );
     PORT (
         -- CPU Interface
@@ -78,6 +80,9 @@ ARCHITECTURE qspi_flashV2 OF qspi_flash IS
         );
     END COMPONENT;
 
+    CONSTANT INIT_WAIT : natural := CLK_HZ / 500;     -- cycles de clk : 2 ms
+    CONSTANT RST_WAIT  : natural := CLK_HZ / 25_000;  -- cycles de clk : 40 us
+
     TYPE state_t IS (
         S_POR, S_CRMR, S_66, S_99, S_INIT_WAIT, S_RST_WAIT,
         S_IDLE, S_RELEASE, S_ACCESS, S_ACK
@@ -107,6 +112,8 @@ ARCHITECTURE qspi_flashV2 OF qspi_flash IS
     SIGNAL m_n_dummy                : unsigned(3 downto 0) := (OTHERS => '0');
     SIGNAL m_n_bytes                : unsigned(2 downto 0) := (OTHERS => '0');
     SIGNAL sio_o, sio_oe, sio_i     : std_logic_vector(3 downto 0);
+    SIGNAL div_cnt                  : natural range 0 to SCLK_DIV - 1 := 0;
+    SIGNAL m_tick                   : std_logic;
     SIGNAL fullAdr                  : std_logic_vector(23 downto 0);
 BEGIN
 
@@ -123,10 +130,23 @@ BEGIN
 
     fullAdr <= std_logic_vector(resize(unsigned(adr), 24));
 
+    -- Tick du moteur : un cycle sur SCLK_DIV
+    m_tick <= clkQspiEn WHEN div_cnt = 0 ELSE '0';
+    PROCESS(clk)
+    BEGIN
+        IF rising_edge(clk) THEN
+            IF div_cnt = SCLK_DIV - 1 THEN
+                div_cnt <= 0;
+            ELSE
+                div_cnt <= div_cnt + 1;
+            END IF;
+        END IF;
+    END PROCESS;
+
     u1 : qspi_master PORT MAP(
         clk      => clk,
         rst      => rst,
-        tick     => clkQspiEn,
+        tick     => m_tick,
         start    => m_start,
         has_cmd  => m_has_cmd,
         cmd_quad => '0',

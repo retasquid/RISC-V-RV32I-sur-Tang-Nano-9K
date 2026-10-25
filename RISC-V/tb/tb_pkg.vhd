@@ -17,6 +17,7 @@ use ieee.numeric_std.all;
 package tb_pkg is
 
     constant CLK27_PERIOD  : time := 37.037 ns;
+    constant CLK_SYS_PERIOD : time := 31.746 ns;   -- horloge systeme (rPLL 27*7/6 = 31.5 MHz)
 
     -- Adresse "ROM" utilisee pour simuler les fetchs (cs SRAM = 0)
     constant ROM_FETCH_ADR : std_logic_vector(31 downto 0) := x"40000000";

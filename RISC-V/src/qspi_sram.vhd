@@ -3,9 +3,10 @@
 -- Controleur de la PSRAM QSPI Lyontek LY68L6400 (8 MiB) pour le bus du coeur.
 --
 -- Init (datasheet §9), relancee a chaque rst :
---   attente INIT_WAIT cycles (>= 150 us), F5h en quad (sortie QPI si la PSRAM
---   y etait restee apres un reset bouton ; tronque et ignore si elle est en
---   SPI), RESET 66h/99h en SPI, puis 35h -> mode QPI.
+--   attente INIT_WAIT = 160 us (>= 150 us, calcule a partir de CLK_HZ),
+--   F5h en quad (sortie QPI si la PSRAM y etait restee apres un reset
+--   bouton ; tronque et ignore si elle est en SPI), RESET 66h/99h en SPI,
+--   puis 35h -> mode QPI.
 -- Acces (mode QPI) :
 --   lecture  : EBh, adresse alignee, 6 wait, 4 octets -> mot 32 bits
 --   ecriture : 38h, adresse octet exacte, 1/2/4 octets de din (non decale,
@@ -13,7 +14,9 @@
 -- Bus : une requete est acceptee quand cs = '1' et rd XOR wr ; rdy et dout
 -- sont tenus jusqu'a ce que rd et wr retombent (handshake de uc). Le
 -- controleur ne depend pas de clkEn.
--- clkQspiEn : tick d'une demi-periode SCLK ('1' -> SCLK = clk/2).
+-- clkQspiEn ET un diviseur interne (SCLK_DIV) donnent le tick du moteur :
+-- un coup de SCLK par tick. SCLK_DIV = 1 et clkQspiEn = '1' -> SCLK = clk.
+-- tCEM <= 8 us : une transaction dure moins de 30 cycles.
 --------------------------------------------------------------------------------
 LIBRARY ieee;
 USE ieee.std_logic_1164.all;
@@ -22,7 +25,8 @@ USE ieee.numeric_std.all;
 ENTITY qspi_sram IS
     GENERIC (
         A_WIDTH   : integer := 23;
-        INIT_WAIT : natural := 4320     -- cycles de clk : 160 us a 27 MHz
+        CLK_HZ    : natural := 31_500_000;  -- frequence de clk
+        SCLK_DIV  : positive := 1           -- SCLK = clk / SCLK_DIV
     );
     PORT (
         -- CPU Interface
@@ -75,6 +79,8 @@ ARCHITECTURE qspi_sramV2 OF qspi_sram IS
         );
     END COMPONENT;
 
+    CONSTANT INIT_WAIT : natural := CLK_HZ / 6250;    -- cycles de clk : 160 us
+
     TYPE state_t IS (
         S_POR, S_F5, S_66, S_99, S_35, S_INIT_WAIT,
         S_IDLE, S_ACCESS, S_ACK
@@ -101,6 +107,8 @@ ARCHITECTURE qspi_sramV2 OF qspi_sram IS
     SIGNAL m_n_dummy                : unsigned(3 downto 0) := (OTHERS => '0');
     SIGNAL m_n_bytes                : unsigned(2 downto 0) := (OTHERS => '0');
     SIGNAL sio_o, sio_oe, sio_i     : std_logic_vector(3 downto 0);
+    SIGNAL div_cnt                  : natural range 0 to SCLK_DIV - 1 := 0;
+    SIGNAL m_tick                   : std_logic;
     SIGNAL fullAdr                  : std_logic_vector(23 downto 0);
     SIGNAL nBytes                   : unsigned(2 downto 0);
 BEGIN
@@ -124,10 +132,23 @@ BEGIN
               "010" WHEN "0011" | "0110" | "1100",
               "100" WHEN OTHERS;
 
+    -- Tick du moteur : un cycle sur SCLK_DIV
+    m_tick <= clkQspiEn WHEN div_cnt = 0 ELSE '0';
+    PROCESS(clk)
+    BEGIN
+        IF rising_edge(clk) THEN
+            IF div_cnt = SCLK_DIV - 1 THEN
+                div_cnt <= 0;
+            ELSE
+                div_cnt <= div_cnt + 1;
+            END IF;
+        END IF;
+    END PROCESS;
+
     u1 : qspi_master PORT MAP(
         clk      => clk,
         rst      => rst,
-        tick     => clkQspiEn,
+        tick     => m_tick,
         start    => m_start,
         has_cmd  => '1',
         cmd_quad => m_cmd_quad,

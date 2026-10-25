@@ -16,13 +16,14 @@
 #define SCREEN_HEIGHT 400
 
 #define CLK_27_FREQ     27000000UL
-/* Horloge du coeur = clk27 (plus de clock-enable depuis l'etape 6). Le coeur
- * est multicycle et attend la flash/PSRAM : une instruction prend de ~20 a
- * ~80 cycles selon le type et la memoire. Ne pas faire de delai logiciel en
- * comptant des instructions avec cette valeur. */
-#define CLK_CORE_FREQ   27000000UL
+/* Horloge systeme = rPLL 27 * 7 / 6 = 31.5 MHz (CLK_HZ dans top.vhd) : coeur,
+ * QSPI et UART. Le coeur est multicycle et attend la flash/PSRAM : une
+ * instruction prend de ~14 a ~50 cycles selon le type et la memoire. Ne pas
+ * faire de delai logiciel en comptant des instructions avec cette valeur. */
+#define CLK_CORE_FREQ   31500000UL
 
-#define serialInit(baud)  BAUD_UART = (int)(((uint64_t)(baud)<<32) / CLK_27_FREQ)
+/* L'UART est cadencee par l'horloge systeme : phase_inc = baud * 2^32 / f */
+#define serialInit(baud)  BAUD_UART = (int)(((uint64_t)(baud)<<32) / CLK_CORE_FREQ)
 
 int serialRead(char *ptr, int len_max);
 int serialWrite(char *ptr);

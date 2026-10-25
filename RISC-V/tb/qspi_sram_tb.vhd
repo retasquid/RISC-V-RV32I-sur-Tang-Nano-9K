@@ -1,7 +1,7 @@
 --------------------------------------------------------------------------------
 -- qspi_sram_tb.vhd
 -- Testbench auto-verifiant du controleur PSRAM (qspi_sram) avec :
---   * le vrai clkDiv (enCore / enMem a partir de clk27)
+--   * le vrai clkDiv (enCore / enMem a partir de clk_sys)
 --   * un maitre de bus qui reproduit le handshake de uc (tb_pkg)
 --   * le modele LY68L6400 (psram_model) qui verifie protocole et timings
 --   * un modele de reference de la memoire cote TB
@@ -18,7 +18,9 @@ entity tb_qspi_sram is
     generic (
         -- true : maitre a pleine vitesse (comme uc V2) ; false : 1 pas / 17
         -- cycles (ancien rythme enCore, requetes tenues longtemps)
-        FAST : boolean := true
+        FAST : boolean := true;
+        -- SCLK = clk / SCLK_DIV (generic du controleur)
+        SCLK_DIV : positive := 1
     );
 end entity;
 
@@ -26,7 +28,7 @@ architecture sim of tb_qspi_sram is
 
     constant MEM_BITS : natural := 16;   -- memoire simulee : 64 KiB (alias au-dela)
 
-    signal clk27        : std_logic := '0';
+    signal clk_sys        : std_logic := '0';
     signal rst          : std_logic := '1';
     signal enSlow       : std_logic;
     signal en           : std_logic;
@@ -53,7 +55,7 @@ architecture sim of tb_qspi_sram is
 
 begin
 
-    clk27 <= not clk27 after CLK27_PERIOD / 2 when not sim_done;
+    clk_sys <= not clk_sys after CLK_SYS_PERIOD / 2 when not sim_done;
     en    <= '1' when FAST else enSlow;
 
     -- Pull-ups des pads (PULL_MODE=UP dans le .cst) : une ligne flottante lit 'H'
@@ -66,14 +68,15 @@ begin
 
     u_div : entity work.clkDiv
         port map (
-            clk27  => clk27,
+            clk27  => clk_sys,
             enCore => enSlow,
             enMem  => enMem
         );
 
     dut : entity work.qspi_sram
         generic map (
-            A_WIDTH => 23
+            A_WIDTH => 23,
+            SCLK_DIV => SCLK_DIV
         )
         port map (
             dout      => din_bus,
@@ -85,9 +88,9 @@ begin
             rdy       => rdy,
             wenb      => m.wenb,
             clkEn     => en,
-            clk       => clk27,
+            clk       => clk_sys,
             rst       => rst,
-            clkQspiEn => '1',            -- SCLK = clk27/2 = 13.5 MHz (comme dans top)
+            clkQspiEn => '1',            -- SCLK = clk = 31.5 MHz (comme dans top)
             sram_CS   => sram_cs_n,
             sram_CLK  => sram_clk,
             sram_SIO0 => sio0,
@@ -174,9 +177,9 @@ begin
                                        & " val=0x" & to_hstring(val);
         begin
             if dead then return; end if;
-            bus_fetch(clk27, en, m);
+            bus_fetch(clk_sys, en, m);
             t0 := txn_count;
-            bus_cycle(clk27, en, rdy, din_bus, m, true, a, val, core_wenb(f3, a),
+            bus_cycle(clk_sys, en, rdy, din_bus, m, true, a, val, core_wenb(f3, a),
                       rdata, ok, TIMEOUT);
             note_access(ok, what);
             if not ok then return; end if;
@@ -202,9 +205,9 @@ begin
             for i in 0 to 3 loop
                 exp(8*i + 7 downto 8*i) := ref((al + i) mod 2**MEM_BITS);
             end loop;
-            bus_fetch(clk27, en, m);
+            bus_fetch(clk_sys, en, m);
             t0 := txn_count;
-            bus_cycle(clk27, en, rdy, din_bus, m, false, a, x"00000000", core_wenb(f3, a),
+            bus_cycle(clk_sys, en, rdy, din_bus, m, false, a, x"00000000", core_wenb(f3, a),
                       rdata, ok, TIMEOUT);
             note_access(ok, what);
             if not ok then return; end if;
@@ -228,7 +231,7 @@ begin
         -- Reset puis init
         ------------------------------------------------------------------------
         rst <= '1';
-        for i in 1 to 20 loop wait until rising_edge(clk27); end loop;
+        for i in 1 to 20 loop wait until rising_edge(clk_sys); end loop;
         rst <= '0';
         wait_init;
 
@@ -299,9 +302,9 @@ begin
 
         ------------------------------------------------------------------------
         report "TB : T7 - reset du controleur en cours de fonctionnement";
-        wait until rising_edge(clk27);
+        wait until rising_edge(clk_sys);
         rst <= '1';
-        for i in 1 to 20 loop wait until rising_edge(clk27); end loop;
+        for i in 1 to 20 loop wait until rising_edge(clk_sys); end loop;
         rst <= '0';
         dead := false;
         n_to := 0;

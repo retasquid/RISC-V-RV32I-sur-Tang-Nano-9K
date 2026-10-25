@@ -11,6 +11,7 @@ ENTITY core IS
         rdy               : in std_logic;
         we, rd            : out std_logic;
         wenb              : out std_logic_vector(3 downto 0);
+        instRet           : out std_logic;  -- 1 cycle a la fin de chaque instruction
         --CLOCK & RESET
         clk                 : in std_logic;
         rst                 : in std_logic
@@ -84,6 +85,7 @@ ARCHITECTURE coreV1 OF core IS
             wEn, selS1Alu, selS2Alu : out   std_logic;
             altAlu, brchEn          : out   std_logic;
             adrSel                  : out   std_logic;
+            enAdr                   : out   std_logic;
             clk, rst                : in    std_logic
         );
     END COMPONENT;
@@ -105,17 +107,19 @@ ARCHITECTURE coreV1 OF core IS
     SIGNAL insType, opAlu, f3                                   : std_logic_vector(2 downto 0);
     SIGNAL selInRd                                              : std_logic_vector(1 downto 0);
     SIGNAL pcSrc, enPc, selS2Alu, selS1Alu , brch, wEn          : std_logic;
-    SIGNAL brchEn, altAlu, enIR, adrSel                         : std_logic;
+    SIGNAL brchEn, altAlu, enIR, adrSel, enAdr                  : std_logic;
+    SIGNAL adrMem                                               : std_logic_vector(31 downto 0) := (OTHERS => '0');
 
 BEGIN
 
+    instRet <= enPc;
     rs1     <= inst(19 downto 15);
     rs2     <= inst(24 downto 20);
     rdest   <= inst(11 downto 7);
     opcode  <= inst(6 downto 0);
     f3      <= inst(14 downto 12);
     f7      <= inst(31 downto 25);
-    adresse <= dAlu WHEN adrSel = '1' ELSE adrPc;
+    adresse <= adrMem WHEN adrSel = '1' ELSE adrPc;
     adr     <= adresse;
     dout    <= s2;
     
@@ -124,6 +128,16 @@ BEGIN
                     "1111";
     wenb_shift <= wenb_unshift(2 downto 0) & '0' WHEN adresse(0)='1' ELSE wenb_unshift;
     wenb <= wenb_shift(1 downto 0) & "00" WHEN adresse(1)='1' ELSE wenb_shift;
+
+    -- Adresse des loads/stores, enregistree a la fin de S_DECODE
+    PROCESS(clk)
+    BEGIN
+        IF rising_edge(clk) THEN
+            IF enAdr = '1' THEN
+                adrMem <= dAlu;
+            END IF;
+        END IF;
+    END PROCESS;
 
     -- Instruction Register
     PROCESS(clk)
@@ -221,6 +235,7 @@ BEGIN
         altAlu => altAlu,
         brchEn => brchEn,
         adrSel => adrSel,
+        enAdr => enAdr,
         clk => clk,
         rst => rst
     );

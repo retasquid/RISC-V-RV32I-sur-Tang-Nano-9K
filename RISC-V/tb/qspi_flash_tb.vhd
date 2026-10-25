@@ -1,7 +1,7 @@
 --------------------------------------------------------------------------------
 -- qspi_flash_tb.vhd
 -- Testbench auto-verifiant du controleur flash (qspi_flash) avec :
---   * le vrai clkDiv (enCore a partir de clk27)
+--   * le vrai clkDiv (enCore a partir de clk_sys)
 --   * un maitre de bus qui reproduit le handshake de uc (tb_pkg)
 --   * le modele GD25Q32C (flash_model) qui verifie protocole et timings,
 --     rempli avec flash_pattern (tb_pkg) : le TB connait chaque octet
@@ -18,7 +18,9 @@ entity tb_qspi_flash is
     generic (
         -- true : maitre a pleine vitesse (comme uc V2) ; false : 1 pas / 17
         -- cycles (ancien rythme enCore, requetes tenues longtemps)
-        FAST : boolean := true
+        FAST : boolean := true;
+        -- SCLK = clk / SCLK_DIV (generic du controleur)
+        SCLK_DIV : positive := 1
     );
 end entity;
 
@@ -26,7 +28,7 @@ architecture sim of tb_qspi_flash is
 
     constant MEM_BITS : natural := 16;   -- flash simulee : 64 KiB (alias au-dela)
 
-    signal clk27        : std_logic := '0';
+    signal clk_sys        : std_logic := '0';
     signal rst          : std_logic := '1';
     signal enSlow       : std_logic;
     signal en           : std_logic;
@@ -54,7 +56,7 @@ architecture sim of tb_qspi_flash is
 
 begin
 
-    clk27 <= not clk27 after CLK27_PERIOD / 2 when not sim_done;
+    clk_sys <= not clk_sys after CLK_SYS_PERIOD / 2 when not sim_done;
     en    <= '1' when FAST else enSlow;
 
     -- Pull-ups des pads (PULL_MODE=UP dans le .cst) : une ligne flottante lit 'H'
@@ -67,14 +69,15 @@ begin
 
     u_div : entity work.clkDiv
         port map (
-            clk27  => clk27,
+            clk27  => clk_sys,
             enCore => enSlow,
             enMem  => enMem
         );
 
     dut : entity work.qspi_flash
         generic map (
-            A_WIDTH => 22
+            A_WIDTH => 22,
+            SCLK_DIV => SCLK_DIV
         )
         port map (
             dout       => din_bus,
@@ -83,9 +86,9 @@ begin
             rd         => m.rd,
             wr         => m.we,
             rdy        => rdy,
-            clk        => clk27,
+            clk        => clk_sys,
             rst        => rst,
-            clkQspiEn  => '1',            -- SCLK = clk27/2 = 13.5 MHz (comme dans top)
+            clkQspiEn  => '1',            -- SCLK = clk = 31.5 MHz (comme dans top)
             flash_CS   => flash_cs_n,
             flash_CLK  => flash_clk,
             flash_SIO0 => sio0,
@@ -169,11 +172,11 @@ begin
         -- Deux pas de uc hors de la flash entre deux acces (cs flash = 0)
         procedure idle_steps is
         begin
-            wait_tick(clk27, en);
+            wait_tick(clk_sys, en);
             m.adr <= x"00000000";
             m.rd  <= '0';
             m.we  <= '0';
-            wait_tick(clk27, en);
+            wait_tick(clk_sys, en);
         end procedure;
 
         -- Transactions attendues (le modele les compte a la remontee de CS#) :
@@ -205,7 +208,7 @@ begin
             idle_steps;
             t1 := txn_count;
             a0 := last_addr;
-            bus_cycle(clk27, en, rdy, din_bus, m, false, a, x"00000000", core_wenb(f3, a),
+            bus_cycle(clk_sys, en, rdy, din_bus, m, false, a, x"00000000", core_wenb(f3, a),
                       rdata, ok, tmo);
             note_access(ok, what, tmo);
             if not ok then return; end if;
@@ -236,7 +239,7 @@ begin
             if dead then return; end if;
             idle_steps;
             t1 := txn_count;
-            bus_cycle(clk27, en, rdy, din_bus, m, true, a, val, core_wenb(F3_W, a),
+            bus_cycle(clk_sys, en, rdy, din_bus, m, true, a, val, core_wenb(F3_W, a),
                       rdata, ok, TIMEOUT);
             note_access(ok, what, TIMEOUT);
             if not ok then return; end if;
@@ -250,9 +253,9 @@ begin
         procedure reset_and_first_load is
             variable c1 : natural;
         begin
-            wait until rising_edge(clk27);
+            wait until rising_edge(clk_sys);
             rst <= '1';
-            for i in 1 to 20 loop wait until rising_edge(clk27); end loop;
+            for i in 1 to 20 loop wait until rising_edge(clk_sys); end loop;
             rst <= '0';
             dead := false;
             n_to := 0;

@@ -26,6 +26,7 @@ architecture sim of tb_top is
     constant TOHOST : std_logic_vector(31 downto 0) := x"00000040";
 
     signal clk27        : std_logic := '0';
+    signal clk_sys      : std_logic := '0';
     signal rst_n        : std_logic := '1';   -- pas d'appui bouton : POR seul
     signal out0         : std_logic_vector(31 downto 0);
     signal uart_tx, clk : std_logic;
@@ -80,13 +81,21 @@ begin
             last_addr => fla, errors => ferr
         );
 
-    -- Releve des ecritures a TOHOST sur le bus du coeur
-    tohost_mon : process (clk27)
+    -- Releve des ecritures a TOHOST sur le bus du coeur (horloge systeme du
+    -- rPLL interne au top)
+    clk_sys_mon : process
+        alias clk_dut is <<signal .tb_top.dut.clk_sys : std_logic>>;
+    begin
+        wait on clk_dut;
+        clk_sys <= clk_dut;
+    end process;
+
+    tohost_mon : process (clk_sys)
         alias bus_we   is <<signal .tb_top.dut.we   : std_logic>>;
         alias bus_adr  is <<signal .tb_top.dut.adr  : std_logic_vector(31 downto 0)>>;
         alias bus_dout is <<signal .tb_top.dut.dout : std_logic_vector(31 downto 0)>>;
     begin
-        if rising_edge(clk27) and bus_we = '1' and bus_adr = TOHOST then
+        if rising_edge(clk_sys) and bus_we = '1' and bus_adr = TOHOST then
             tohost_val  <= bus_dout;
             tohost_seen <= true;
         end if;

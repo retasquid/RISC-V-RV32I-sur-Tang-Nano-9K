@@ -36,6 +36,18 @@ END ENTITY;
 
 ARCHITECTURE topV1 OF top IS
 
+    -- Horloge systeme clk_sys = rPLL 27 * 7 / 6 = 31.5 MHz : coeur, bus,
+    -- QSPI (SCLK = clk_sys), peripheriques, port coeur de la VRAM.
+    -- A changer avec le rPLL (src/gowin_rpll_sys), le .sdc et CLK_CORE_FREQ
+    -- de soft/periph.h.
+    CONSTANT CLK_HZ : natural := 31_500_000;
+
+    -- Diviseurs de SCLK, independants du coeur : SCLK = CLK_HZ / DIV.
+    -- 1 -> 31.5 MHz (un nibble par cycle) ; 2 -> 15.75 MHz, la donnee lue a
+    -- 2 periodes (63 ns) au lieu d'une pour revenir des puces externes.
+    CONSTANT FLASH_SCLK_DIV : positive := 2;
+    CONSTANT PSRAM_SCLK_DIV : positive := 1;
+
     COMPONENT RAM
         PORT(
             dout            : out std_logic_vector(31 downto 0);
@@ -66,6 +78,7 @@ ARCHITECTURE topV1 OF top IS
             rdy             : in std_logic;
             we, rd          : out std_logic;
             wenb            : out std_logic_vector(3 downto 0);
+            instRet         : out std_logic;
             --CLOCK & RESET
             clk             : in std_logic;
             rst             : in std_logic
@@ -74,7 +87,9 @@ ARCHITECTURE topV1 OF top IS
 
     COMPONENT qspi_sram
         GENERIC(
-            A_WIDTH : integer := 21
+            A_WIDTH  : integer := 21;
+            CLK_HZ   : natural := 31_500_000;
+            SCLK_DIV : positive := 1
         );
         PORT (
             -- CPU Interface
@@ -120,8 +135,8 @@ ARCHITECTURE topV1 OF top IS
     COMPONENT qspi_flash
         GENERIC(
             A_WIDTH     : integer := 22;
-            INIT_WAIT   : natural := 54000;
-            RST_WAIT    : natural := 1080
+            CLK_HZ      : natural := 31_500_000;
+            SCLK_DIV    : positive := 1
         );
         PORT(
             -- CPU Interface
@@ -170,20 +185,42 @@ ARCHITECTURE topV1 OF top IS
     );
     END COMPONENT;
 
+    -- rPLL Gowin : 27 MHz * 13 / 7 = 50.14 MHz, clkoutd = /2 = 25.07 MHz
+    -- (horloge pixel 640x400@70, -0.4 % par rapport a 25.175 MHz)
+    COMPONENT Gowin_rPLL
+        PORT (
+            clkout  : out std_logic;
+            clkoutd : out std_logic;
+            clkin   : in  std_logic
+        );
+    END COMPONENT;
+
+    -- rPLL Gowin : 27 MHz * 7 / 6 = 31.5 MHz (horloge systeme)
+    COMPONENT Gowin_rPLL_sys
+        PORT (
+            clkout  : out std_logic;
+            lock    : out std_logic;
+            clkin   : in  std_logic
+        );
+    END COMPONENT;
+
     SIGNAL dout, din, adr                 : std_logic_vector(31 downto 0);
     SIGNAL wenb                           : std_logic_vector(3 downto 0);
     SIGNAL rdy, we, rd                    : std_logic;
-    SIGNAL clkCpu, clkQspi, clk25         : std_logic;
+    SIGNAL clk50, clk25                   : std_logic;
+    SIGNAL clk_sys, pllLock               : std_logic;
     SIGNAL csRam, csFlash, csIO, csVram   : std_logic;
     SIGNAL red, green, blue               : std_logic;
+    SIGNAL instRet, instPulse             : std_logic := '0';
 
     -- Sorties de chaque esclave, multiplexees vers le coeur (pas de trois etats)
-    SIGNAL dinIO, dinFlash, dinRam        : std_logic_vector(31 downto 0);
-    SIGNAL rdyIO, rdyFlash, rdyRam        : std_logic;
+    SIGNAL dinIO, dinFlash, dinRam, dinVram : std_logic_vector(31 downto 0);
+    SIGNAL rdyIO, rdyFlash, rdyRam, rdyVram : std_logic;
 
     -- Reset : POR + bouton rst_n resynchronise
     SIGNAL porCnt                         : unsigned(7 downto 0) := (OTHERS => '0');
     SIGNAL rstN1, rstN2                   : std_logic := '0';
+    SIGNAL lock1, lock2                   : std_logic := '0';
     SIGNAL rst                            : std_logic := '1';
 BEGIN
     red3 <= red & red & red;
@@ -195,33 +232,48 @@ BEGIN
     csFlash <= '1' WHEN adr(31 downto 24)=x"40" ELSE '0';
     csIO    <= '1' WHEN adr(31 downto 24)=x"00" ELSE '0';
 
-    -- Bus de lecture : mux explicite. Zone non mappee (dont la VRAM tant que
-    -- le VGA est commente) : rdy = '1' et din = 0, le coeur ne se bloque pas.
+    -- Bus de lecture : mux explicite. Zone non mappee : rdy = '1' et din = 0,
+    -- le coeur ne se bloque pas.
     WITH adr(31 downto 24) SELECT
     din <= dinIO    WHEN x"00",
            dinFlash WHEN x"40",
            dinRam   WHEN x"80",
+           dinVram  WHEN x"C0",
            (OTHERS => '0') WHEN OTHERS;
 
     WITH adr(31 downto 24) SELECT
     rdy <= rdyIO    WHEN x"00",
            rdyFlash WHEN x"40",
            rdyRam   WHEN x"80",
+           rdyVram  WHEN x"C0",
            '1'      WHEN OTHERS;
 
-    -- Sortie de debug (pin 40) : haut pendant chaque requete memoire du coeur
-    -- (fetch, load, store). Plus de clock-enable : le coeur tourne sur clk27.
-    clk <= rd OR we;
-
-    -- Reset synchrone : actif pendant 255 cycles apres la configuration (les
-    -- registres partent de leur valeur initiale), puis tant que rst_n = '0'.
-    -- rst_n est asynchrone (bouton) : 2 bascules de synchronisation.
-    PROCESS(clk27)
+    -- Sortie de debug (pin 40) : une impulsion d'un cycle clk_sys (32 ns) par
+    -- instruction executee. Frequence mesuree = instructions par seconde.
+    -- Passe par un registre : pas de glitch sur la broche.
+    PROCESS(clk_sys)
     BEGIN
-        IF rising_edge(clk27) THEN
+        IF rising_edge(clk_sys) THEN
+            instPulse <= instRet;
+        END IF;
+    END PROCESS;
+    clk <= instPulse;
+
+    -- Reset synchrone : actif tant que le rPLL systeme n'est pas verrouille,
+    -- puis pendant 255 cycles (les registres partent de leur valeur
+    -- initiale), puis tant que rst_n = '0'. rst_n et lock sont asynchrones :
+    -- 2 bascules de synchronisation chacun.
+    PROCESS(clk_sys)
+    BEGIN
+        IF rising_edge(clk_sys) THEN
             rstN1 <= rst_n;
             rstN2 <= rstN1;
-            IF porCnt /= x"FF" THEN
+            lock1 <= pllLock;
+            lock2 <= lock1;
+            IF lock2 = '0' THEN
+                porCnt <= (OTHERS => '0');
+                rst    <= '1';
+            ELSIF porCnt /= x"FF" THEN
                 porCnt <= porCnt + 1;
                 rst    <= '1';
             ELSE
@@ -237,7 +289,7 @@ BEGIN
     --     adr  => adr(9 downto 2),
     --     wenb => wenb,
     --     rdy  => rdyRam,
-    --     clk  => clk27,
+    --     clk  => clk_sys,
     --     cs   => csRam,
     --     we   => we,
     --     rd   => rd
@@ -252,7 +304,7 @@ BEGIN
     --     rdy  => rdyFlash,
     --     rd   => rd,
     --     cs   => csFlash,
-    --     clk  => clk27
+    --     clk  => clk_sys
     -- );
 
     u4 : core 
@@ -264,13 +316,16 @@ BEGIN
         we   => we,
         rd   => rd,
         wenb   => wenb,
-        clk  => clk27,
+        instRet => instRet,
+        clk  => clk_sys,
         rst  => rst
     );
 
     u5 : qspi_sram
     GENERIC MAP (
-        A_WIDTH       => 23
+        A_WIDTH       => 23,
+        CLK_HZ        => CLK_HZ,
+        SCLK_DIV      => PSRAM_SCLK_DIV
     )
     PORT MAP (
         dout        => dinRam,
@@ -283,10 +338,10 @@ BEGIN
         rdy         => rdyRam,
         wenb        => wenb,
         clkEn       => '1',     -- inutilise par qspi_sram
-        clk         => clk27,
+        clk         => clk_sys,
         rst         => rst,
 
-        clkQspiEn   => '1',     -- SCLK = clk27/2 = 13.5 MHz (tCEM 8 us respecte)
+        clkQspiEn   => '1',     -- SCLK = clk_sys / PSRAM_SCLK_DIV (tCEM 8 us respecte)
 
         sram_CS     => sram_CS,
         sram_CLK    => sram_CLK,
@@ -305,17 +360,19 @@ BEGIN
         rd     => rd,
         we     => we,
         cs     => csIO,
-        clk    => clk27,
+        clk    => clk_sys,
         rst    => rst,
         GPIO0  => out0,
-        clk_xtal => clk27,
+        clk_xtal => clk_sys,    -- baud = BAUD_UART * clk_sys / 2^32
         uart_tx  => uart_tx,
         uart_rx  => uart_rx
     );
     
     u7 : qspi_flash
     GENERIC MAP (
-        A_WIDTH     => 22
+        A_WIDTH     => 22,
+        CLK_HZ      => CLK_HZ,
+        SCLK_DIV    => FLASH_SCLK_DIV
     )
     PORT MAP (
         dout        => dinFlash,
@@ -325,10 +382,10 @@ BEGIN
         rd          => rd,
         wr          => we,
         rdy         => rdyFlash,
-        clk         => clk27,
+        clk         => clk_sys,
         rst         => rst,
 
-        clkQspiEn   => '1',     -- SCLK = clk27/2 = 13.5 MHz
+        clkQspiEn   => '1',     -- SCLK = clk_sys / FLASH_SCLK_DIV
 
         flash_CS    => flash_CS,
         flash_CLK   => flash_CLK,
@@ -338,25 +395,39 @@ BEGIN
         flash_SIO3  => flash_SIO3
     );
 
-    -- u8 : vgaModule
-    -- PORT MAP(
-    --     -- VGA interface
-    --     clk_xtal => clk25,
-    --     rst      => rst,
-    --     hSync    => hSync,
-    --     vSync    => vSync,
-    --     red      => red,
-    --     green    => green,
-    --     blue     => blue,
-    --     -- CPU interface
-    --     clk_vram  => clkCpu,
-    --     cs_vram   => csVram,
-    --     we_vram   => we,
-    --     rd_vram   => rd,
-    --     rdy_vram  => rdyVram,     -- a ajouter au mux (x"C0")
-    --     wenb_vram => wenb,
-    --     addr_vram => adr(14 downto 0),
-    --     din_vram  => dout,
-    --     dout_vram => dinVram
-    -- );
+    u8 : vgaModule
+    PORT MAP(
+        -- VGA interface
+        clk_xtal => clk25,
+        rst      => rst,
+        hSync    => hSync,
+        vSync    => vSync,
+        red      => red,
+        green    => green,
+        blue     => blue,
+        -- CPU interface
+        clk_vram  => clk_sys,
+        cs_vram   => csVram,
+        we_vram   => we,
+        rd_vram   => rd,
+        rdy_vram  => rdyVram,
+        wenb_vram => wenb,
+        addr_vram => adr(14 downto 0),
+        din_vram  => dout,
+        dout_vram => dinVram
+    );
+
+    u9 : Gowin_rPLL
+    PORT MAP(
+        clkout  => clk50,
+        clkoutd => clk25,
+        clkin   => clk27
+    );
+
+    u10 : Gowin_rPLL_sys
+    PORT MAP(
+        clkout  => clk_sys,
+        lock    => pllLock,
+        clkin   => clk27
+    );
 END ARCHITECTURE;

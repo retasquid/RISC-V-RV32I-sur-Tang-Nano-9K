@@ -6,11 +6,18 @@
 #   GUI, avec les waves    : dans ModelSim, cd RISC-V/sim ; set TEST rv32ui-jalr ; do top_tests.do
 # Resume final : "TB_RESULT: SUCCES (n/n)" ou "TB_RESULT: ECHEC (...)".
 
+# Les IP Gowin rPLL et DPB (BRAM du VGA) sont remplacees par des modeles
+# legers (tb/gowin_rpll_fast.vhd, tb/gowin_dpb_fast.vhd) : les modeles
+# detailles de prim_sim ralentissent ces tests d'un facteur ~40. vga_tb, lui,
+# utilise les vraies IP. prim_sim n'est donc plus necessaire ici.
+
 if {[file exists work]} { vdel -lib work -all }
 vlib work
 
 set SRC ../src
 vcom -2008 -quiet -suppress 1514 \
+    ../tb/gowin_rpll_fast.vhd ../tb/gowin_dpb_fast.vhd \
+    $SRC/vgaSigGen.vhd $SRC/vgaMemInterface.vhd $SRC/vgaModule.vhd \
     $SRC/MUX2_32.vhd $SRC/MUX4_32.vhd $SRC/alu.vhd $SRC/barrelShifter.vhd \
     $SRC/immDecoder.vhd $SRC/signExtender.vhd $SRC/regFile.vhd $SRC/pc.vhd \
     $SRC/uc.vhd $SRC/core.vhd $SRC/clkDiv.vhd $SRC/ROM.vhd $SRC/RAM.vhd \

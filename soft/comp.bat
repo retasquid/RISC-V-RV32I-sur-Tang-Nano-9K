@@ -43,7 +43,7 @@ riscv-none-elf-gcc ^
     -nostartfiles ^
     -T link.ld ^
     start.S ^
-    periph.h periph.c^
+    periph.h periph.c lib2d.h lib2d.c ^
     %SOURCE% ^
     -Wl,--start-group -lc -lm -lgcc -Wl,--end-group ^
     -specs=nosys.specs ^
