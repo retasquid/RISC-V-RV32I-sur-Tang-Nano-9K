@@ -32,8 +32,6 @@ RISC-V/                 projet Gowin EDA (RISC-V.gprj)
 soft/                   logiciel : start.s, link.ld, periph.c/h, comp.bat, elf2rom.py
   Flasher3.1/           programmation de la flash via un Arduino (MCU) + script Python (PC)
   tests/                programmes de test système (riscv-tests rv32ui + tests maison)
-logisim_evo/, RISCV.ods schéma Logisim et notes de conception
-CLAUDE.md               notes techniques détaillées : architecture, historique des bugs, état des tests
 ```
 
 ## Matériel
@@ -83,8 +81,6 @@ Les modèles de la flash et de la PSRAM vérifient le protocole et les timings d
 - PSRAM, flash et UART (émission et réception) : validés sur carte.
 - La dernière optimisation (cœur sans clock-enable, flux flash) est validée en simulation. Il reste à vérifier sur carte et dans le rapport de timing Gowin.
 - Le VGA reste à réintégrer.
-
-Le détail figure dans [CLAUDE.md](CLAUDE.md).
 
 ## Licences
 
