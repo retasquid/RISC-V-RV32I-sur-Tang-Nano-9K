@@ -36,7 +36,7 @@ REM ============================================================
 echo [1/3] Compilation...
 
 riscv-none-elf-gcc ^
-    -march=rv32i ^
+    -march=rv32im ^
     -mabi=ilp32 ^
     -O2 ^
     -ffreestanding ^

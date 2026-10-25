@@ -15,6 +15,12 @@ END ENTITY;
 ARCHITECTURE regFileV1 OF regFile IS
     TYPE regs_type IS ARRAY (0 to 31) OF std_logic_vector(31 downto 0);
     SIGNAL regs : regs_type := (others => (others => '0'));
+    -- RAM distribuee (memoires 16x4 des blocs logiques, lecture
+    -- combinatoire) : sans cet attribut, Gowin met le banc en BSRAM et en
+    -- fait une copie par port de lecture, soit 2 blocs de 18 Kbit pour
+    -- 1 Kbit utile chacun.
+    ATTRIBUTE syn_ramstyle : string;
+    ATTRIBUTE syn_ramstyle OF regs : SIGNAL IS "distributed_ram";
 
 BEGIN
     s1 <= (OTHERS => '0') WHEN rs1="00000" ELSE regs(to_integer(unsigned(rs1)));

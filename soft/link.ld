@@ -119,6 +119,7 @@ SECTIONS
     . = ALIGN(4);
 
     _heap_start = .;
+    PROVIDE(end = _heap_start);   /* debut du tas pour _sbrk (malloc, sprintf de newlib) */
 
     . = ORIGIN(RAM) + LENGTH(RAM) - 0x010000;
 

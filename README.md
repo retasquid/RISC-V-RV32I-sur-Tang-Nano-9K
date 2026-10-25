@@ -1,16 +1,18 @@
-# RISC-V RV32I sur Tang Nano 9K
+# RISC-V RV32IM sur Tang Nano 9K
 
-Processeur **RV32I multicycle écrit en VHDL** pour la carte Sipeed **Tang Nano 9K** (FPGA Gowin GW1NR-9). Il démarre depuis une flash QSPI externe, utilise une PSRAM QSPI externe comme RAM et se programme en C avec `riscv-none-elf-gcc`.
+Processeur **RV32IM multicycle écrit en VHDL** pour la carte Sipeed **Tang Nano 9K** (FPGA Gowin GW1NR-9). Il démarre depuis une flash QSPI externe, utilise une PSRAM QSPI externe comme RAM et se programme en C avec `riscv-none-elf-gcc`.
 
 ## Caractéristiques
 
-- Jeu d'instructions **RV32I** complet, sans CSR, interruptions ni `fence.i`. Il passe les 40 tests `rv32ui` des [riscv-tests](https://github.com/riscv-software-src/riscv-tests) applicables.
+- Jeu d'instructions **RV32IM**, sans CSR, interruptions ni `fence.i`. Il passe les 40 tests `rv32ui` applicables et les 8 tests `rv32um` des [riscv-tests](https://github.com/riscv-software-src/riscv-tests).
+- **Extension M** : multiplication sur les multiplieurs DSP du FPGA (instruction en 5 cycles), division itérative avec sortie anticipée (7 à 35 cycles). Une multiplication 16.16 à la Doom passe de ~1 800 cycles en logiciel à 16.
 - Cœur multicycle à **31,5 MHz** (rPLL), une seule horloge système, sans clock-enable : 2 cycles par instruction hors attente mémoire, 4 pour un load/store.
 - Code exécuté directement depuis la **flash QSPI GigaDevice GD25Q32C** (4 Mio) : lecture Quad I/O `EBh` en mode continu, et CS# maintenu bas pendant les fetchs séquentiels.
+- **Cache flash de 8 Kio** (correspondance directe, lignes de 32 octets) : une instruction déjà en cache s'exécute en 3 cycles, soit jusqu'à 10 M instructions/s.
 - SCLK réglable séparément pour la flash et la PSRAM : 31,5 MHz (un nibble par cycle) ou 15,75 MHz (÷2, réglage par défaut tant que 31,5 MHz n'est pas validé sur carte). Constantes `FLASH_SCLK_DIV` et `PSRAM_SCLK_DIV` dans `top.vhd`.
 - **8 Mio de RAM** : PSRAM QSPI Lyontek **LY68L6400**, en mode QPI.
-- Périphériques : 32 GPIO, UART (débit programmable).
-- **Sortie VGA monochrome** : image 640×400 envoyée en mode standard 640×480 @ 60 Hz (centrée, 40 lignes noires en haut et en bas), framebuffer de 32 Kio en BRAM double port, horloge pixel de 25,07 MHz produite par le rPLL. Le mode 640×400 @ 70 Hz natif reste disponible (generic `MODE_480`).
+- Périphériques : 32 GPIO, UART (débit programmable), timer 64 bits (cycles et microsecondes depuis le reset ; `time_us()`, `delay_ms()`… dans `periph.h`).
+- **Sortie VGA en 16 niveaux de gris** : image 320×200 (4 bits par pixel) agrandie ×2, envoyée en mode standard 640×480 @ 60 Hz (centrée, 40 lignes noires en haut et en bas) sur les sorties RGB 3-3-2 via une palette de gris. Framebuffer de 32 Kio en BRAM double port, horloge pixel de 25,07 MHz produite par le rPLL. Le mode 640×400 @ 70 Hz natif reste disponible (generic `MODE_480`).
 - Broche de test `clk` (pin 40) : une impulsion par instruction exécutée, pour mesurer la vitesse réelle au fréquencemètre.
 
 ## Horloges
@@ -54,7 +56,7 @@ flowchart LR
     PLLV -- "clkoutd ÷ 2" --> CLK25["clk25<br/>25,07 MHz"]
 
     subgraph D25 ["Domaine pixel (25,07 MHz)"]
-        VGA["vgaSignalGen<br/>640×480 @ 59,7 Hz"]
+        VGA["vgaSignalGen<br/>320×200 16 gris → 640×480 @ 59,7 Hz"]
         VRAMB["VRAM port B"]
     end
 
@@ -66,25 +68,29 @@ flowchart LR
 
 ## Performances
 
-Mesures en simulation, en cycles de `clk_sys` (31,5 MHz) par instruction :
+Mesures en simulation à 31,5 MHz, avec la flash à SCLK ÷2 (fils Dupont) et la PSRAM à ÷1, sur 40 ms d'exécution :
 
-| Type de code | SCLK 31,5 MHz | SCLK 15,75 MHz (défaut) |
-|---|---|---|
-| ALU, code séquentiel en flash | 14 (2,25 M/s) | 22 (1,43 M/s) |
-| Boucle courte (3 instructions + branchement pris) | 18 (1,74 M/s) | 29 (1,07 M/s) |
-| `sw` / `lw` en PSRAM | 40 (0,79 M/s) | 68 (0,47 M/s) |
-| Saut (`j`, rupture du flux flash) | 31 (1,02 M/s) | 52 (0,61 M/s) |
+| Programme | Sans cache | Avec cache (8 Kio) | Gain |
+|---|---|---|---|
+| `vga_demo.c` (3,3 Kio de code) | 1,0 M instr/s | 8,95 M instr/s | ×9,0 |
+| Cube 3D en flottants + `sprintf` (96 Kio de code) | 0,94 M instr/s | 7,3 M instr/s | ×7,8 |
 
-Le temps est surtout passé à attendre la mémoire QSPI. Un fetch séquentiel reprend le flux de la flash (8 coups de SCLK) ; un saut relance une lecture complète (20 coups).
+| Accès flash | Cycles |
+|---|---|
+| Hit (instruction ALU complète : 3 cycles) | 2 |
+| Défaut, ligne neuve | ≈ 55 |
+| Mot suivant pendant le remplissage de la ligne | ≈ 21 |
+
+Le cache garde les lignes de 32 octets déjà lues. Un défaut ne bloque le cœur que jusqu'au mot demandé : la suite de la ligne arrive en arrière-plan, en flux. Les accès à la PSRAM (pile, variables) coûtent toujours environ 25 à 30 cycles.
 
 ## Carte mémoire
 
 | Adresse | Zone | Contenu |
 |---|---|---|
-| `0x0000_0000` | IO | `0x10` GPIO, `0x14` direction GPIO, `0x18` UART TX, `0x1C` UART RX, `0x20` débit UART |
+| `0x0000_0000` | IO | `0x10` GPIO, `0x14` direction GPIO, `0x18` UART TX, `0x1C` UART RX, `0x20` débit UART, `0x30`/`0x34` cycles (64 bits), `0x38`/`0x3C` microsecondes (64 bits) |
 | `0x4000_0000` | Flash QSPI (4 Mio) | code et constantes ; adresse de reset |
 | `0x8000_0000` | PSRAM QSPI (8 Mio) | `.data`, `.bss`, pile |
-| `0xC000_0000` | VRAM (32 Kio) | écran 640×400 : 20 mots de 32 bits par ligne, bit 31 = pixel le plus à gauche |
+| `0xC000_0000` | VRAM (32 Kio) | écran 320×200 en 16 gris : 4 bits par pixel, 40 mots de 32 bits par ligne, 8 pixels par mot, pixel de gauche dans les bits 31..28 |
 
 Registre RX : le bit 8 vaut 1 quand un octet est disponible (bits 7:0). La lecture consomme l'octet ; sans octet disponible, la lecture rend 0.
 
@@ -146,12 +152,13 @@ Les modèles de la flash et de la PSRAM vérifient le protocole et les timings d
 
 ## État
 
-- Jeu d'instructions : validé en simulation (44/44 tests système).
+- Jeu d'instructions : validé en simulation (53/53 tests système, dont rv32ui et rv32um).
 - PSRAM, flash et UART (émission et réception) : validés sur carte.
 - Cœur sans clock-enable et flux flash : validés sur carte (529,5 k instructions/s mesurés sur une boucle de saut à 27 MHz, comme prévu par la simulation).
 - Horloge système à 31,5 MHz : validée en simulation. Avec SCLK à 31,5 MHz, les données lues sur carte étaient corrompues ; SCLK est donc à 15,75 MHz par défaut, en cours de validation.
 - VGA : validé en simulation (image complète vérifiée pixel par pixel), à tester sur un écran avec `soft/vga_demo.c`.
-- Timing Gowin : Fmax de 33,0 MHz pour l'horloge système (31,5 MHz demandés), 88 MHz pour l'horloge pixel.
+- Cache flash : validé en simulation (TB unitaire et 44/44 tests système), à valider sur carte.
+- Timing Gowin : Fmax de 33,0 MHz pour l'horloge système (31,5 MHz demandés), 108 MHz pour l'horloge pixel. BSRAM : 21/26.
 
 ## Licences
 

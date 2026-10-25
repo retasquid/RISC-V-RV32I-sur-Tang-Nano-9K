@@ -20,9 +20,9 @@ vcom -2008 -quiet -suppress 1514 \
     $SRC/vgaSigGen.vhd $SRC/vgaMemInterface.vhd $SRC/vgaModule.vhd \
     $SRC/MUX2_32.vhd $SRC/MUX4_32.vhd $SRC/alu.vhd $SRC/barrelShifter.vhd \
     $SRC/immDecoder.vhd $SRC/signExtender.vhd $SRC/regFile.vhd $SRC/pc.vhd \
-    $SRC/uc.vhd $SRC/core.vhd $SRC/clkDiv.vhd $SRC/ROM.vhd $SRC/RAM.vhd \
+    $SRC/uc.vhd $SRC/muldiv.vhd $SRC/core.vhd $SRC/clkDiv.vhd $SRC/ROM.vhd $SRC/RAM.vhd \
     $SRC/uart.vhd $SRC/peripherals.vhd \
-    $SRC/qspi_master.vhd $SRC/qspi_sram.vhd $SRC/qspi_flash.vhd $SRC/top.vhd
+    $SRC/qspi_master.vhd $SRC/qspi_sram.vhd $SRC/qspi_flash.vhd $SRC/flash_cache.vhd $SRC/top.vhd
 vcom -2008 -quiet ../tb/tb_pkg.vhd ../tb/psram_model.vhd ../tb/flash_model.vhd ../tb/top_tb.vhd
 
 if {[info exists TEST]} {

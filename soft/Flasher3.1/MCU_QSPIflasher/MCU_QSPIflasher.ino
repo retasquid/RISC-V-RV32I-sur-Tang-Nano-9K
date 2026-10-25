@@ -1,7 +1,6 @@
 #include "MX25L.h"
 #include "transfert.h"
 
-uint8_t data[1024];
 void setup() {
   pinMode(CSn, OUTPUT);
   pinMode(SCLK, OUTPUT);

@@ -219,7 +219,9 @@ def merge_zones(zones):
 
         0x60000000 + 32 octets
 
-    Les trous restent des zones séparées.
+    Les trous restent des zones séparées, sauf les petits trous
+    d'alignement (< 16 octets, entre .text et .rodata par exemple),
+    comblés avec FF : sinon une zone commencerait au milieu d'une page.
     """
 
     zones.sort(key=lambda x: x[0])
@@ -244,8 +246,9 @@ def merge_zones(zones):
 
         last_end = last_address + len(last_data)
 
-        if address == last_end:
+        if last_end <= address < last_end + 16:
 
+            last_data.extend(b"\xFF" * (address - last_end))
             last_data.extend(data)
 
         elif address > last_end:
@@ -572,7 +575,8 @@ def writeZone(
     ser,
     address,
     data,
-    use_4k_erase=False
+    use_4k_erase=False,
+    do_erase=True
 ):
 
     length = len(data)
@@ -602,23 +606,27 @@ def writeZone(
 
         sector_size = SECTOR_SIZE
 
-    print("Erasing...")
+    if do_erase:
 
-    if not erase_sectors_for_zone(
-        ser,
-        address,
-        length,
-        sector_size
-    ):
+        print("Erasing...")
 
-        print("ERROR: Erase failed!")
-        return False
+        if not erase_sectors_for_zone(
+            ser,
+            address,
+            length,
+            sector_size
+        ):
+
+            print("ERROR: Erase failed!")
+            return False
 
     # --------------------------------------------------------
     # Page programming
     # --------------------------------------------------------
 
     written = 0
+
+    sector_retries = 0
 
     while written < length:
 
@@ -635,7 +643,7 @@ def writeZone(
             length - written
         )
 
-        page_data = data[
+        chunk_data = data[
             written:
             written + chunk
         ]
@@ -643,12 +651,20 @@ def writeZone(
         # ----------------------------------------------------
         # IMPORTANT :
         #
-        # Si la page n'est pas complète, on complète avec FF.
-        #
-        # Après erase, une Flash contient FF.
+        # Le MCU ecrit toujours une page entiere depuis son
+        # debut : on place les donnees a leur offset et on
+        # complete avec FF (programmer FF ne change rien, une
+        # autre zone deja ecrite dans la page reste intacte).
+        # Seuls les octets de cette zone sont verifies.
         # ----------------------------------------------------
 
-        page_data = page_data.ljust(PAGE_SIZE, b"\xFF")
+        page_data = (
+            b"\xFF" * page_offset + chunk_data
+        ).ljust(PAGE_SIZE, b"\xFF")
+
+        lo = page_offset
+
+        hi = page_offset + chunk
 
         if VERBOSITY:
 
@@ -716,7 +732,84 @@ def writeZone(
 
             return False
 
-        if read_back != page_data:
+        # ----------------------------------------------------
+        # Erreur de verification : parasite a la relecture ou
+        # a l'ecriture (fils longs). On relit d'abord ; si
+        # l'erreur persiste, on reprogramme la page (s'il ne
+        # manque que des 0) ou on efface et reecrit le secteur
+        # de 4 KiB (un bit a 0 ne remonte a 1 que par erase).
+        # ----------------------------------------------------
+
+        for _ in range(3):
+
+            if read_back[lo:hi] == chunk_data:
+                break
+
+            read_back = getPage(ser)
+
+            if read_back is None:
+
+                print("ERROR: GET_PAGE failed!")
+                return False
+
+        if read_back[lo:hi] != chunk_data:
+
+            bad = sum(
+                1 for x, y in zip(read_back[lo:hi], chunk_data)
+                if x != y
+            )
+
+            # Reprogrammer ne peut que passer des bits de 1 a 0 :
+            # possible si chaque 1 attendu est encore a 1
+            only_ones_left = all(
+                (y & ~x) == 0
+                for x, y in zip(read_back[lo:hi], chunk_data)
+            )
+
+            if only_ones_left:
+
+                print(
+                    f"\nWARNING: {bad} octet(s) faux "
+                    f"@ 0x{curr:08X}, reprogrammation"
+                )
+
+                if not setAddr(ser, curr) or \
+                   not setPage(ser, page_data):
+
+                    print("ERROR: SET_PAGE failed!")
+                    return False
+
+                read_back = getPage(ser)
+
+            elif sector_retries < 3 and \
+                    (curr & ~(SECTOR_4K_SIZE - 1)) >= address:
+
+                # (seulement si le secteur commence dans cette zone :
+                # sinon l'effacement detruirait une autre zone)
+
+                sector_retries += 1
+
+                sector = curr & ~(SECTOR_4K_SIZE - 1)
+
+                print(
+                    f"\nWARNING: {bad} octet(s) faux "
+                    f"@ 0x{curr:08X}, effacement et "
+                    f"reecriture du secteur 0x{sector:08X} "
+                    f"(essai {sector_retries}/3)"
+                )
+
+                if not secErase4k(ser, sector):
+
+                    print("ERROR: Erase failed!")
+                    return False
+
+                sleep(0.5)
+
+                written = max(sector, address) - address
+
+                continue
+
+        if read_back[lo:hi] != chunk_data:
 
             print(
                 "ERROR: Verification failed!"
@@ -889,6 +982,35 @@ def main():
     # Program every HEX zone
     # --------------------------------------------------------
 
+    # --------------------------------------------------------
+    # Effacement de tous les secteurs de 64 KiB touches, une
+    # seule fois et avant toute ecriture : deux zones peuvent
+    # partager un secteur (effacer zone par zone detruirait la
+    # precedente).
+    # --------------------------------------------------------
+
+    sectors = sorted({
+        sector
+        for address, data in zones
+        if not (0x603FF000 <= address < 0x60400000)
+        for sector in range(
+            address & ~(SECTOR_SIZE - 1),
+            address + len(data),
+            SECTOR_SIZE
+        )
+    })
+
+    print(f"Erasing {len(sectors)} sector(s) of 64 KiB...")
+
+    for sector in sectors:
+
+        if not secErase(ser, sector):
+            print("\nERROR: Erase failed!")
+            ser.close()
+            return
+
+        sleep(0.5)
+
     for address, data in zones:
 
         # ----------------------------------------------------
@@ -912,7 +1034,8 @@ def main():
         # Write zone
         # ----------------------------------------------------
 
-        if not writeZone(ser, address, data, use_4k_erase=use_4k):
+        if not writeZone(ser, address, data, use_4k_erase=use_4k,
+                         do_erase=use_4k):
             print("\nERROR: Programming failed!")
             ser.close()
             return

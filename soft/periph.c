@@ -39,23 +39,28 @@ int serialWrite(char *ptr)
 }
 
 void clearScreen(uint32_t color){
-    volatile unsigned int* p = SCREEN_P_BEGIN;
-    for(int i = 0; i<(SCREEN_P_END-SCREEN_P_BEGIN); i++) {
-        p[i] = color;
+    /* gris replique dans les 8 quartets du mot (sans multiplication) */
+    uint32_t w = color & 15;
+    w |= w << 4;
+    w |= w << 8;
+    w |= w << 16;
+    volatile uint32_t* p = (volatile uint32_t*)SCREEN_P_BEGIN;
+    for(int i = 0; i < SCREEN_HEIGHT * SCREEN_WPL; i++) {
+        p[i] = w;
     }
 }
 
+void plotPixel(uint16_t x, uint16_t y, uint32_t color){
+    if(x >= SCREEN_WIDTH || y >= SCREEN_HEIGHT) return;
+    volatile uint32_t* ptr = (volatile uint32_t*)SCREEN_P_BEGIN + (x >> 3) + y * SCREEN_WPL;
+    int sh = 28 - ((x & 7) << 2);      /* pixel de gauche = bits 31..28 */
+    *ptr = (*ptr & ~(15u << sh)) | ((color & 15) << sh);
+}
+
 void set_pixel(uint16_t x, uint16_t y){
-    volatile int* ptr = SCREEN_P_BEGIN + (x/32) + (y*20);
-    *ptr = (1<<(31-(x%32)))|(*ptr);
+    plotPixel(x, y, GRAY_WHITE);
 }
 
 void clear_pixel(uint16_t x, uint16_t y){
-    int* ptr = SCREEN_P_BEGIN + (x/32) + (y*20);
-    *ptr = (~(1<<(31-(x%32))))&(*ptr);
-}
-
-void plotPixel(uint16_t x, uint16_t y, uint32_t color){
-    if(color)set_pixel(x, y);
-    else clear_pixel(x, y);
+    plotPixel(x, y, GRAY_BLACK);
 }

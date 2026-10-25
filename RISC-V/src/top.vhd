@@ -116,6 +116,9 @@ ARCHITECTURE topV1 OF top IS
     END COMPONENT;
 
     COMPONENT peripherals
+        GENERIC(
+            CLK_HZ : natural := 31_500_000
+        );
         PORT(
             -- MEMORY INTERFACE
             dout            : out std_logic_vector(31 downto 0);
@@ -132,7 +135,8 @@ ARCHITECTURE topV1 OF top IS
         );
     END COMPONENT;
 
-    COMPONENT qspi_flash
+    -- Cache 8 KiB devant la flash (contient qspi_flash, memes ports)
+    COMPONENT flash_cache
         GENERIC(
             A_WIDTH     : integer := 22;
             CLK_HZ      : natural := 31_500_000;
@@ -168,9 +172,9 @@ ARCHITECTURE topV1 OF top IS
         hSync    : OUT std_logic;
         vSync    : OUT std_logic;
 
-        red      : OUT std_logic;
-        green    : OUT std_logic;
-        blue     : OUT std_logic;
+        red      : OUT std_logic_vector(2 DOWNTO 0);
+        green    : OUT std_logic_vector(2 DOWNTO 0);
+        blue     : OUT std_logic_vector(1 DOWNTO 0);
 
         -- CPU interface
         clk_vram  : IN  std_logic;
@@ -210,7 +214,8 @@ ARCHITECTURE topV1 OF top IS
     SIGNAL clk50, clk25                   : std_logic;
     SIGNAL clk_sys, pllLock               : std_logic;
     SIGNAL csRam, csFlash, csIO, csVram   : std_logic;
-    SIGNAL red, green, blue               : std_logic;
+    SIGNAL red, green                     : std_logic_vector(2 downto 0);
+    SIGNAL blue                           : std_logic_vector(1 downto 0);
     SIGNAL instRet, instPulse             : std_logic := '0';
 
     -- Sorties de chaque esclave, multiplexees vers le coeur (pas de trois etats)
@@ -223,9 +228,10 @@ ARCHITECTURE topV1 OF top IS
     SIGNAL lock1, lock2                   : std_logic := '0';
     SIGNAL rst                            : std_logic := '1';
 BEGIN
-    red3 <= red & red & red;
-    green3 <= green & green & green;
-    blue2 <= blue & blue;
+    -- Sorties VGA : 16 niveaux de gris convertis en RGB 3-3-2 par vgaModule
+    red3   <= red;
+    green3 <= green;
+    blue2  <= blue;
 
     csVram  <= '1' WHEN adr(31 downto 24)=x"C0" ELSE '0';
     csRam   <= '1' WHEN adr(31 downto 24)=x"80" ELSE '0';
@@ -351,7 +357,10 @@ BEGIN
         sram_SIO3   => sram_SIO3
     );
 
-    u6 : peripherals 
+    u6 : peripherals
+    GENERIC MAP(
+        CLK_HZ => CLK_HZ        -- timer : microsecondes
+    )
     PORT MAP(
         dout   => dinIO,
         din    => dout,
@@ -368,7 +377,7 @@ BEGIN
         uart_rx  => uart_rx
     );
     
-    u7 : qspi_flash
+    u7 : flash_cache
     GENERIC MAP (
         A_WIDTH     => 22,
         CLK_HZ      => CLK_HZ,

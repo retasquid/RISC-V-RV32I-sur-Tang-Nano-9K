@@ -10,8 +10,10 @@
 --     T4 largeur et periode de Hsync (96 / 800 pixels, active basse) et de
 --        Vsync (2 lignes ; 525 lignes active basse en 640x480, 449 active
 --        haute en 640x400), adresse VRAM < 8000
---     T5 chaque pixel d'une image complete = bit (31 - x mod 32) du mot
---        (y - V_TOP)*20 + x/32 ; noir hors de l'image
+--     T5 chaque pixel d'une image complete : image 320x200 en 16 gris
+--        agrandie x2, pixel (x, y) = quartet (x/2) mod 8 (depuis les bits
+--        31..28) du mot ((y - V_TOP)/2)*40 + x/16, converti par la palette
+--        en RGB 3-3-2 ; noir hors de l'image
 -- Generic MODE_480 : mode teste (true : 640x480@60, false : 640x400@70).
 -- Le resultat final est la ligne "TB_RESULT: SUCCES" ou "TB_RESULT: ECHEC".
 -- Lancement : voir RISC-V/sim/vga.do
@@ -51,7 +53,16 @@ architecture sim of vga_tb is
     signal rdy      : std_logic;
     signal cs       : std_logic;
 
-    signal hs, vs, r, g, b : std_logic;
+    signal hs, vs   : std_logic;
+    signal r, g     : std_logic_vector(2 downto 0);
+    signal b        : std_logic_vector(1 downto 0);
+
+    -- Meme palette que vgaModule (gris 4 bits -> R & G & B)
+    type pal_t is array (0 to 15) of std_logic_vector(7 downto 0);
+    constant PALETTE : pal_t := (
+        "00000000", "00000100", "00100100", "01000101", "01001001", "01101001",
+        "01101101", "10001101", "01110010", "10010010", "10010110", "10110110",
+        "10111010", "11011011", "11111011", "11111111");
 
     signal writes_done : boolean := false;
     signal frame_done  : boolean := false;
@@ -204,8 +215,9 @@ begin
         variable vs_lines     : natural := 0;
         variable checking     : boolean := false;
         variable checked      : natural := 0;
-        variable exp          : std_logic;
+        variable exp          : std_logic_vector(7 downto 0);
         variable w            : std_logic_vector(31 downto 0);
+        variable fx, n        : natural;
 
         procedure verr(msg : string) is
         begin
@@ -257,15 +269,17 @@ begin
             -- Pixels (une image complete, apres la fin des ecritures)
             if checking and h_lock and v_lock then
                 if x < 640 and y >= V_TOP and y < V_TOP + 400 then
-                    w   := ref((y - V_TOP) * 20 + x / 32);
-                    exp := w(31 - x mod 32);
+                    fx  := x / 2;
+                    w   := ref(((y - V_TOP) / 2) * 40 + fx / 8);
+                    n   := fx mod 8;
+                    exp := PALETTE(to_integer(unsigned(w(31 - 4*n downto 28 - 4*n))));
                     checked := checked + 1;
                 else
-                    exp := '0';
+                    exp := (others => '0');
                 end if;
-                if r /= exp or g /= exp or b /= exp then
-                    verr("pixel (" & integer'image(x) & "," & integer'image(y) & ") = "
-                         & std_logic'image(r) & ", attendu " & std_logic'image(exp));
+                if r & g & b /= exp then
+                    verr("pixel (" & integer'image(x) & "," & integer'image(y) & ") = 0x"
+                         & to_hstring(r & g & b) & ", attendu 0x" & to_hstring(exp));
                 end if;
             end if;
             hs_p := hs; vs_p := vs;

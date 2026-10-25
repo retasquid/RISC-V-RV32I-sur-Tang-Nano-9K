@@ -3,6 +3,7 @@
 # ---------------------------------------------------------------------------
 RISC-V/src/obsolete/
 RISC-V/tb/obsolete/
+soft/obsolete/
 
 # ---------------------------------------------------------------------------
 # Gowin EDA : sorties de synthese / placement-routage et etat de l'IDE

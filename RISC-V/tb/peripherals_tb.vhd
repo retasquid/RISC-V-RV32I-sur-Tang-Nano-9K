@@ -10,6 +10,9 @@
 --   T5 reset : registres remis a zero
 --   T6/T7 RX apres reset : pas d'octet perime, reception qui repart meme si
 --      un octet n'avait pas ete lu (bug vu sur carte)
+--   T8 timer 64 bits : chaque lecture LO puis HI donne exactement le nombre
+--      de cycles ecoules, y compris quand la retenue tombe entre les deux
+--      lectures (8 dephasages) ; microsecondes a +-1 pres
 -- Le resultat final est la ligne "TB_RESULT: SUCCES" ou "TB_RESULT: ECHEC".
 -- Lancement : voir RISC-V/sim/peripherals.do
 --------------------------------------------------------------------------------
@@ -30,18 +33,25 @@ architecture sim of tb_peripherals is
 
     constant BAUD      : natural := 115200;
     constant BIT_T     : time    := 1 sec / BAUD;
-    -- phase_inc = baud * 2^32 / 27 MHz (comme serialInit dans periph.h)
+    -- phase_inc = baud * 2^32 / 31,5 MHz (comme serialInit dans periph.h)
     constant PHASE_INC : std_logic_vector(31 downto 0) :=
-        std_logic_vector(to_unsigned(natural(real(BAUD) * 4294967296.0 / 27.0e6), 32));
+        std_logic_vector(to_unsigned(natural(real(BAUD) * 4294967296.0 / 31.5e6), 32));
 
     constant A_GPIO : natural := 16#10#;
     constant A_DIR  : natural := 16#14#;
     constant A_TX   : natural := 16#18#;
     constant A_RX   : natural := 16#1C#;
     constant A_BAUD : natural := 16#20#;
-    constant A_NONE : natural := 16#3C#;
+    constant A_NONE : natural := 16#2C#;   -- non decodee
+    constant A_TLO  : natural := 16#30#;
+    constant A_THI  : natural := 16#34#;
+    constant A_ULO  : natural := 16#38#;
+    constant A_UHI  : natural := 16#3C#;
+    constant TB_CLK_HZ : natural := 31_500_000;   -- 31,5 cycles par us : non entier
+    -- Le timer demarre pres de la retenue des bits 31..0 (4096 cycles)
+    constant TIME_INIT : std_logic_vector(63 downto 0) := x"00000000FFFFF000";
 
-    signal clk27      : std_logic := '0';
+    signal clk_sys      : std_logic := '0';
     signal rst        : std_logic := '1';
     signal enSlow     : std_logic;
     signal en         : std_logic;
@@ -72,7 +82,7 @@ architecture sim of tb_peripherals is
 
 begin
 
-    clk27 <= not clk27 after CLK27_PERIOD / 2 when not sim_done;
+    clk_sys <= not clk_sys after CLK_SYS_PERIOD / 2 when not sim_done;
     en    <= '1' when FAST else enSlow;
 
     cs <= '1' when m.adr(31 downto 24) = x"00" else '0';
@@ -82,21 +92,25 @@ begin
     gpio <= (others => 'L');
 
     u_div : entity work.clkDiv
-        port map (clk27 => clk27, enCore => enSlow, enMem => enMem);
+        port map (clk27 => clk_sys, enCore => enSlow, enMem => enMem);
 
     dut : entity work.peripherals
+        generic map (
+            CLK_HZ    => TB_CLK_HZ,
+            TIME_INIT => TIME_INIT
+        )
         port map (
             dout     => din_bus,
             din      => m.dout,
             adr      => m.adr(9 downto 2),
             rdy      => rdy,
-            clk      => clk27,
+            clk      => clk_sys,
             rst      => rst,
             cs       => cs,
             we       => m.we,
             rd       => m.rd,
             GPIO0    => gpio,
-            clk_xtal => clk27,
+            clk_xtal => clk_sys,
             uart_tx  => uart_tx,
             uart_rx  => uart_rx
         );
@@ -148,6 +162,11 @@ begin
         variable n_acc   : natural := 0;
         variable r       : std_logic_vector(31 downto 0);
         variable n       : natural;
+        -- T8
+        variable t8_lo, t8_hi     : std_logic_vector(31 downto 0);
+        variable t8_v, t8_prev    : unsigned(63 downto 0);
+        variable t8_t, t8_tprev   : time := 0 ns;
+        variable t8_after, t8_n   : natural;
 
         procedure check(cond : boolean; msg : string) is
         begin
@@ -165,8 +184,8 @@ begin
             variable ok : boolean;
             variable rd : std_logic_vector(31 downto 0);
         begin
-            bus_fetch(clk27, en, m);
-            bus_cycle(clk27, en, rdy, din_bus, m, is_write, ad, val, "1111", rd, ok, TIMEOUT);
+            bus_fetch(clk_sys, en, m);
+            bus_cycle(clk_sys, en, rdy, din_bus, m, is_write, ad, val, "1111", rd, ok, TIMEOUT);
             n_acc := n_acc + 1;
             check(ok, "pas de rdy pour l'acces a 0x" & to_hstring(ad));
             v := to_x01(rd);
@@ -248,7 +267,7 @@ begin
 
     begin
         rst <= '1';
-        for i in 1 to 20 loop wait until rising_edge(clk27); end loop;
+        for i in 1 to 20 loop wait until rising_edge(clk_sys); end loop;
         rst <= '0';
 
         ------------------------------------------------------------------------
@@ -302,9 +321,9 @@ begin
         ------------------------------------------------------------------------
         report "TB : T5 - reset";
         wr(A_DIR, x"000000FF");
-        wait until rising_edge(clk27);
+        wait until rising_edge(clk_sys);
         rst <= '1';
-        for i in 1 to 20 loop wait until rising_edge(clk27); end loop;
+        for i in 1 to 20 loop wait until rising_edge(clk_sys); end loop;
         rst <= '0';
         expect(A_DIR, x"00000000", "DIR apres reset");
         expect(A_BAUD, x"00000000", "BAUD apres reset");
@@ -317,9 +336,9 @@ begin
         wr(A_BAUD, PHASE_INC);
         uart_receive((0 => x"0D"));
         expect(A_RX, x"00000000", "RX relu apres consommation du '\r'");
-        wait until rising_edge(clk27);
+        wait until rising_edge(clk_sys);
         rst <= '1';
-        for i in 1 to 20 loop wait until rising_edge(clk27); end loop;
+        for i in 1 to 20 loop wait until rising_edge(clk_sys); end loop;
         rst <= '0';
         wr(A_BAUD, PHASE_INC);
         expect(A_RX, x"00000000", "RX apres reset (octet de la session precedente)");
@@ -334,13 +353,64 @@ begin
         rx_go  <= false;
         wait until rx_done;
         wait for 2 * BIT_T;
-        wait until rising_edge(clk27);
+        wait until rising_edge(clk_sys);
         rst <= '1';
-        for i in 1 to 20 loop wait until rising_edge(clk27); end loop;
+        for i in 1 to 20 loop wait until rising_edge(clk_sys); end loop;
         rst <= '0';
         wr(A_BAUD, PHASE_INC);
         expect(A_RX, x"00000000", "RX apres reset (octet non lu avant le reset)");
         uart_receive((x"79", x"0D"));
+
+        ------------------------------------------------------------------------
+        report "TB : T8 - timer 64 bits (cycles, microsecondes)";
+        for ph in 0 to 7 loop
+            wait until rising_edge(clk_sys);
+            rst <= '1';
+            for i in 1 to 20 loop wait until rising_edge(clk_sys); end loop;
+            rst <= '0';
+            for i in 1 to ph loop wait until rising_edge(clk_sys); end loop;
+            t8_prev   := (others => '0');
+            t8_after  := 0;
+            t8_n      := 0;
+            -- Lectures LO puis HI jusqu'a 3 paires apres la retenue
+            while t8_after < 3 and t8_n < 3000 loop
+                rd(A_TLO, t8_lo);
+                t8_t := now;
+                rd(A_THI, t8_hi);
+                t8_v := unsigned(std_logic_vector'(t8_hi & t8_lo));
+                if t8_n = 0 then
+                    check(t8_v >= unsigned(TIME_INIT) and t8_v < unsigned(TIME_INIT) + 200,
+                          "T8 : 1re lecture apres reset = 0x" & to_hstring(t8_v));
+                else
+                    check(t8_v - t8_prev = to_unsigned((t8_t - t8_tprev + CLK_SYS_PERIOD / 2) / CLK_SYS_PERIOD, 64),
+                          "T8 (dephasage " & integer'image(ph) & ") : 0x" & to_hstring(t8_prev)
+                          & " puis 0x" & to_hstring(t8_v) & ", " & integer'image((t8_t - t8_tprev + CLK_SYS_PERIOD / 2) / CLK_SYS_PERIOD)
+                          & " cycles ecoules");
+                end if;
+                if t8_hi /= x"00000000" then
+                    t8_after := t8_after + 1;
+                end if;
+                t8_prev  := t8_v;
+                t8_tprev := t8_t;
+                t8_n     := t8_n + 1;
+            end loop;
+            check(t8_after >= 3, "T8 : la retenue vers TIME_HI n'a jamais ete vue");
+        end loop;
+        -- Microsecondes : 31500 cycles a 31,5 MHz = 1 ms
+        rd(A_ULO, t8_lo);
+        t8_t := now;
+        rd(A_UHI, t8_hi);
+        t8_prev := unsigned(std_logic_vector'(t8_hi & t8_lo));
+        for i in 1 to 31500 loop wait until rising_edge(clk_sys); end loop;
+        rd(A_ULO, t8_lo);
+        t8_tprev := now;
+        rd(A_UHI, t8_hi);
+        t8_v := unsigned(std_logic_vector'(t8_hi & t8_lo));
+        n := (t8_tprev - t8_t + CLK_SYS_PERIOD / 2) / CLK_SYS_PERIOD;      -- cycles entre les 2 lectures
+        check(abs(to_integer(t8_v - t8_prev) - n * 1000 / (TB_CLK_HZ / 1000)) <= 1,
+              "T8 : " & integer'image(to_integer(t8_v - t8_prev)) & " us comptees pour "
+              & integer'image(n) & " cycles");
+        check(t8_hi = x"00000000", "T8 : USEC_HI = 0x" & to_hstring(t8_hi));
 
         ------------------------------------------------------------------------
         wait for 1 us;

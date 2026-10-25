@@ -19,6 +19,17 @@ ENTITY core IS
 END ENTITY;
 
 ARCHITECTURE coreV1 OF core IS
+    COMPONENT mulDiv
+        PORT(
+            clk, rst    : in  std_logic;
+            start       : in  std_logic;
+            f3          : in  std_logic_vector(2 downto 0);
+            a, b        : in  std_logic_vector(31 downto 0);
+            done        : out std_logic;
+            res         : out std_logic_vector(31 downto 0)
+        );
+    END COMPONENT;
+
     COMPONENT alu
         PORT(
             s1, s2          : in std_logic_vector(31 downto 0);
@@ -77,6 +88,7 @@ ARCHITECTURE coreV1 OF core IS
             fun3                    : in    std_logic_vector(2 downto 0);
             fun7                    : in    std_logic_vector(6 downto 0);
             rdy                     : in    std_logic;
+            mdDone                  : in    std_logic;
 
             enPc, rd, enIR          : out   std_logic;
             we, pcSrc               : out   std_logic;
@@ -86,6 +98,7 @@ ARCHITECTURE coreV1 OF core IS
             altAlu, brchEn          : out   std_logic;
             adrSel                  : out   std_logic;
             enAdr                   : out   std_logic;
+            mdStart, selMd          : out   std_logic;
             clk, rst                : in    std_logic
         );
     END COMPONENT;
@@ -109,6 +122,9 @@ ARCHITECTURE coreV1 OF core IS
     SIGNAL pcSrc, enPc, selS2Alu, selS1Alu , brch, wEn          : std_logic;
     SIGNAL brchEn, altAlu, enIR, adrSel, enAdr                  : std_logic;
     SIGNAL adrMem                                               : std_logic_vector(31 downto 0) := (OTHERS => '0');
+    -- Extension M
+    SIGNAL mdStart, mdDone, selMd                               : std_logic;
+    SIGNAL mdRes, dWb                                           : std_logic_vector(31 downto 0);
 
 BEGIN
 
@@ -168,7 +184,7 @@ BEGIN
         s2 =>   s2,
         rs1 =>  rs1,
         rs2 =>  rs2,
-        d =>    d,
+        d =>    dWb,
         rd =>   rdest,
         clk =>  clk,
         we =>   wEn
@@ -220,6 +236,7 @@ BEGIN
         fun3 => f3,
         fun7 => f7,
         rdy =>rdy,
+        mdDone => mdDone,
 
         enPc=> enPc,
         rd => rd,
@@ -236,9 +253,24 @@ BEGIN
         brchEn => brchEn,
         adrSel => adrSel,
         enAdr => enAdr,
+        mdStart => mdStart,
+        selMd => selMd,
         clk => clk,
         rst => rst
     );
+
+    -- Extension M : MUL* / DIV* / REM* (operandes rs1, rs2)
+    u10 : mulDiv PORT MAP(
+        clk   => clk,
+        rst   => rst,
+        start => mdStart,
+        f3    => f3,
+        a     => s1,
+        b     => s2,
+        done  => mdDone,
+        res   => mdRes
+    );
+    dWb <= mdRes WHEN selMd = '1' ELSE d;
 
     u9 : signExtender PORT MAP(
         d_din =>   din,

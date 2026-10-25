@@ -10,6 +10,15 @@
 --                         octet disponible, la lecture rend 0 (jamais un octet
 --                         deja consomme ou recu avant un reset).
 --   0x08 (0x20) BAUD_UART phase_inc = baud * 2^32 / clk_xtal
+--   0x0C (0x30) TIME_LO   cycles de clk depuis le reset, bits 31..0 ; la
+--                         lecture fige les bits 63..32 dans TIME_HI
+--   0x0D (0x34) TIME_HI   bits 63..32, figes a la derniere lecture de TIME_LO
+--   0x0E (0x38) USEC_LO   microsecondes depuis le reset, bits 31..0 ; la
+--                         lecture fige les bits 63..32 dans USEC_HI
+--   0x0F (0x3C) USEC_HI   bits 63..32, figes a la derniere lecture de USEC_LO
+--   Lire LO puis HI donne une valeur 64 bits coherente. Compteurs en lecture
+--   seule, remis a zero par rst. Microsecondes exactes pour tout CLK_HZ
+--   (accumulateur de phase : +1 us tous les CLK_HZ / 1e6 cycles en moyenne).
 -- Bus : une requete est traitee UNE seule fois, au premier cycle ou
 -- cs = '1' et rd XOR we ; rdy et dout sont tenus jusqu'a ce que rd et we
 -- retombent (handshake de uc). Les effets de bord (consommation de l'octet
@@ -20,6 +29,10 @@ USE ieee.std_logic_1164.all;
 USE ieee.numeric_std.all;
 
 ENTITY peripherals IS
+    GENERIC(
+        CLK_HZ    : natural := 31_500_000;                  -- frequence de clk (>= 1 MHz)
+        TIME_INIT : std_logic_vector(63 downto 0) := (others => '0')  -- valeur au reset (tests)
+    );
     PORT(
         -- MEMORY INTERFACE
         dout            : out std_logic_vector(31 downto 0);
@@ -60,6 +73,11 @@ ARCHITECTURE peripheralsV2 OF peripherals IS
     SIGNAL tog_s1, tog_s2, tog_prev : std_logic := '0';
     SIGNAL rx_byte         : std_logic_vector(7 downto 0) := (others => '0');
     SIGNAL uart_rx_pending : std_logic := '0';
+
+    -- Timer 64 bits : cycles et microsecondes, partie haute figee a la lecture
+    SIGNAL cyc, usec        : unsigned(63 downto 0) := unsigned(TIME_INIT);
+    SIGNAL us_acc           : natural range 0 to CLK_HZ - 1 := 0;
+    SIGNAL cyc_hi, usec_hi  : std_logic_vector(31 downto 0) := (others => '0');
 
     COMPONENT UART
         PORT(
@@ -115,9 +133,22 @@ BEGIN
                 uart_send_reg <= '0';
             END IF;
 
+            -- Timer : un cycle de plus ; une microseconde de plus chaque fois
+            -- que l'accumulateur depasse CLK_HZ (pas de 1 000 000 par cycle)
+            cyc <= cyc + 1;
+            IF us_acc >= CLK_HZ - 1_000_000 THEN
+                us_acc <= us_acc + 1_000_000 - CLK_HZ;
+                usec   <= usec + 1;
+            ELSE
+                us_acc <= us_acc + 1_000_000;
+            END IF;
+
             consume := '0';
 
             IF rst = '1' THEN
+                cyc            <= unsigned(TIME_INIT);
+                usec           <= unsigned(TIME_INIT);
+                us_acc         <= 0;
                 ack            <= '0';
                 gpio_out       <= (others => '0');
                 gpio_dir       <= (others => '0');
@@ -160,6 +191,16 @@ BEGIN
                             END IF;
                         WHEN x"08" =>
                             dout_r <= uart_phase_inc;
+                        WHEN x"0C" =>
+                            dout_r <= std_logic_vector(cyc(31 downto 0));
+                            cyc_hi <= std_logic_vector(cyc(63 downto 32));
+                        WHEN x"0D" =>
+                            dout_r <= cyc_hi;
+                        WHEN x"0E" =>
+                            dout_r <= std_logic_vector(usec(31 downto 0));
+                            usec_hi <= std_logic_vector(usec(63 downto 32));
+                        WHEN x"0F" =>
+                            dout_r <= usec_hi;
                         WHEN OTHERS =>
                             dout_r <= (others => '0');
                     END CASE;

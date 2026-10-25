@@ -2,6 +2,7 @@
 """Compile les programmes de test pour top_tb.
 
   riscv-tests/isa/rv32ui/*.S  -> rv32ui-<nom>   (env/riscv_test.h, env/link_test.ld)
+  riscv-tests/isa/rv32um/*.S  -> rv32um-<nom>   (idem ; tout est compile en -march=rv32im)
   custom/*.S                  -> custom-<nom>   (idem)
   custom/*.c                  -> custom-<nom>   (start.S + link.ld du projet, comme comp.bat)
 
@@ -25,7 +26,7 @@ import elf2rom  # noqa: E402
 
 GCC = "riscv-none-elf-gcc"
 OBJDUMP = "riscv-none-elf-objdump"
-ARCH = ["-march=rv32i", "-mabi=ilp32"]
+ARCH = ["-march=rv32im", "-mabi=ilp32"]   # extension M depuis l'etape 12
 
 ASM_FLAGS = ARCH + [
     "-static", "-nostdlib", "-nostartfiles",
@@ -66,6 +67,8 @@ def main():
     jobs = []
     for src in sorted((HERE / "riscv-tests" / "isa" / "rv32ui").glob("*.S")):
         jobs.append((f"rv32ui-{src.stem}", src, "asm"))
+    for src in sorted((HERE / "riscv-tests" / "isa" / "rv32um").glob("*.S")):
+        jobs.append((f"rv32um-{src.stem}", src, "asm"))
     for src in sorted((HERE / "custom").glob("*.S")):
         jobs.append((f"custom-{src.stem}", src, "asm"))
     for src in sorted((HERE / "custom").glob("*.c")):

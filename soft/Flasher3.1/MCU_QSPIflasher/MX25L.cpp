@@ -242,14 +242,29 @@ void EEPROMQread(uint32_t address, uint8_t *buffer, uint16_t length) {
   sendQByte((address >> 16) & 0xFF);
   sendQByte((address >> 8)  & 0xFF);
   sendQByte( address        & 0xFF);
+  // Octet de mode (2 clk) + 4 dummy = 6 clk. La flash commence à piloter
+  // SIO0-3 au front descendant du dernier clk dummy : il faut donc lâcher le
+  // bus AVANT ce front, sinon l'AVR (sortie à 0) et la flash se battent
+  // (bit 4 du 1er octet lu à 0, selon l'adresse).
   sendQByte(0x00);
   sendQByte(0x00);
-  sendQByte(0x00);
-
-  pinMode(SIO0, INPUT);
+  pinMode(SIO0, OUTPUT); pinMode(SIO1, OUTPUT);
+  pinMode(SIO2, OUTPUT); pinMode(SIO3, OUTPUT);
+  digitalWrite(SIO0, LOW); digitalWrite(SIO1, LOW);
+  digitalWrite(SIO2, LOW); digitalWrite(SIO3, LOW);
+  digitalWrite(SCLK, HIGH);            // 5e clk dummy
+  delayMicroseconds(5);
+  digitalWrite(SCLK, LOW);
+  delayMicroseconds(5);
+  digitalWrite(SCLK, HIGH);            // 6e clk dummy
+  delayMicroseconds(5);
+  pinMode(SIO0, INPUT);                // bus relâché avant le front descendant
   pinMode(SIO1, INPUT);
   pinMode(SIO2, INPUT);
   pinMode(SIO3, INPUT);
+  delayMicroseconds(5);
+  digitalWrite(SCLK, LOW);
+  delayMicroseconds(5);
   // Réception des données
   for(uint16_t i = 0; i < length; i++) {
     buffer[i] = receiveQByte();

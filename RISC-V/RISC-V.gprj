@@ -13,15 +13,17 @@
         <File path="src/barrelShifter.vhd" type="file.vhdl" enable="1"/>
         <File path="src/clkDiv.vhd" type="file.vhdl" enable="1"/>
         <File path="src/core.vhd" type="file.vhdl" enable="1"/>
+        <File path="src/flash_cache.vhd" type="file.vhdl" enable="1"/>
         <File path="src/gowin_dpb/gowin_dpb.vhd" type="file.vhdl" enable="1"/>
         <File path="src/gowin_osc/gowin_osc.vhd" type="file.vhdl" enable="1"/>
         <File path="src/gowin_rpll/gowin_rpll.vhd" type="file.vhdl" enable="1"/>
         <File path="src/gowin_rpll_sys/gowin_rpll_sys.vhd" type="file.vhdl" enable="1"/>
         <File path="src/immDecoder.vhd" type="file.vhdl" enable="1"/>
+        <File path="src/muldiv.vhd" type="file.vhdl" enable="1"/>
         <File path="src/pc.vhd" type="file.vhdl" enable="1"/>
         <File path="src/peripherals.vhd" type="file.vhdl" enable="1"/>
-        <File path="src/qspi_master.vhd" type="file.vhdl" enable="1"/>
         <File path="src/qspi_flash.vhd" type="file.vhdl" enable="1"/>
+        <File path="src/qspi_master.vhd" type="file.vhdl" enable="1"/>
         <File path="src/qspi_sram.vhd" type="file.vhdl" enable="1"/>
         <File path="src/regFile.vhd" type="file.vhdl" enable="1"/>
         <File path="src/signExtender.vhd" type="file.vhdl" enable="1"/>
