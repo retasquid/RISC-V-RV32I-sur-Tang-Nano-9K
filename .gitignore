@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# Anciennes versions conservees localement (remplacees pendant la refonte)
+# ---------------------------------------------------------------------------
+RISC-V/src/obsolete/
+RISC-V/tb/obsolete/
+
+# ---------------------------------------------------------------------------
+# Gowin EDA : sorties de synthese / placement-routage et etat de l'IDE
+# (on garde les options de synthese : impl/RISC-V_process_config.json)
+# ---------------------------------------------------------------------------
+RISC-V/impl/*
+!RISC-V/impl/RISC-V_process_config.json
+*.gprj.user
+
+# ---------------------------------------------------------------------------
+# Simulation (ModelSim / GHDL)
+# ---------------------------------------------------------------------------
+RISC-V/sim/work/
+RISC-V/sim/tests/
+transcript
+*.wlf
+*.log
+*.vcd
+*.cf
+modelsim.ini
+
+# ---------------------------------------------------------------------------
+# Logiciel : sorties de compilation
+# ---------------------------------------------------------------------------
+*.elf
+*.hex
+*.o
+*.bin
+*.dump
+soft/display
+__pycache__/
+*.pyc
+
+# ---------------------------------------------------------------------------
+# Divers
+# ---------------------------------------------------------------------------
+.vscode/
+*.bak
+*~
+.~lock.*#

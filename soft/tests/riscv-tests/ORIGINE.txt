@@ -1,0 +1,2 @@
+riscv-tests, commit 3df703cd52d5f0d8224e3c50bf03c6cb70efff98 (Mon Oct 19 15:08:40 2026 -0700)
+Sous-ensemble copie de https://github.com/riscv-software-src/riscv-tests (isa/rv32ui sans fence_i ni ma_data, + rv64ui inclus, + macros/scalar). Licence BSD : voir LICENSE.

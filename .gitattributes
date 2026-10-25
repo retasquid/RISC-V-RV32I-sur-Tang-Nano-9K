@@ -1,0 +1,9 @@
+# Fins de ligne normalisees (LF dans le depot), sauf scripts Windows
+* text=auto
+*.bat text eol=crlf
+
+# Fichiers binaires
+*.ods binary
+*.pdf binary
+*.png binary
+*.jpg binary
